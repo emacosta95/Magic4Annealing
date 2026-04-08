@@ -5,7 +5,7 @@ import scipy
 from scipy.sparse.linalg import expm_multiply
 from scipy.optimize import minimize
 import scipy.sparse as sp
-
+from scipy.sparse.linalg import eigsh,expm_multiply
 
 def configuration(res, energy, grad_energy):
     print('Optimization Success=', res.success)
@@ -97,8 +97,8 @@ class Schedule:
         correction_driver = np.mean(matrix_driver, axis=0)   # (nsteps,)
         correction_target = np.mean(matrix_target, axis=0)
 
-        h_driver = (1 - t / tf) * (1 + correction_driver)
-        h_target = (t / tf)     * (1 + correction_target)
+        h_driver = (1 - t / tf) * ((1 + correction_driver))
+        h_target = (t / tf)     * ((1 + correction_target))
 
         return h_driver, h_target
 
@@ -118,7 +118,6 @@ class Schedule:
 class SchedulerModel(Schedule):
     def __init__(
         self,
-        initial_state: np.ndarray,
         target_hamiltonian: scipy.sparse.spmatrix,
         initial_hamiltonian: scipy.sparse.spmatrix,
         reference_hamiltonian: scipy.sparse.spmatrix,
@@ -133,7 +132,7 @@ class SchedulerModel(Schedule):
         self.target_hamiltonian = target_hamiltonian
         self.initial_hamiltonian = initial_hamiltonian
         self.reference_hamiltonian = reference_hamiltonian
-        self.initial_state = initial_state
+
 
         super().__init__(
             tf=tf,
@@ -158,14 +157,16 @@ class SchedulerModel(Schedule):
 
     # ─────────────────────────────────────────────────────────────────────────
     def forward(self, parameters):
-        psi = self.initial_state.copy()
         dt = self.time[1] - self.time[0]
         self.parameters = parameters
 
         hamiltonians = [self.initial_hamiltonian, self.target_hamiltonian]
         h_driver, h_target = self.get_driving()          # pre-compute once
         schedules = [h_driver, h_target]
-
+        # initialize the state
+        dim      = self.initial_hamiltonian.shape[0]
+        psi_init = np.ones(dim, dtype=complex) / np.sqrt(dim)
+        psi = psi_init.copy()
         for i in range(self.nsteps):
             time_hamiltonian = sum(
                 schedules[r][i] * hamiltonians[r] for r in range(2)

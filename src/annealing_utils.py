@@ -67,3 +67,8 @@ def get_unbiased_catalyst_term(nqubits):
             hamiltonian_xx+=SpinOperator([('x',i,'x',j)],coupling=[1/nqubits],size=nqubits,verbose=1).qutip_op
     
     return hamiltonian_xx.data.as_scipy()
+
+
+def get_counteradiabatic_term(driver_hamiltonian,target_hamiltonian):
+    # we compute the counterdiabatic term as i [H_target-H_driver,H_driver]
+    return 1j*(target_hamiltonian-driver_hamiltonian)@driver_hamiltonian-1j*driver_hamiltonian@(target_hamiltonian-driver_hamiltonian)
