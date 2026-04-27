@@ -11,6 +11,10 @@ from functools import partial
 # enable float64 — essential for physics accuracy
 jax.config.update("jax_enable_x64", True)
 
+# ── valid schedule types ───────────────────────────────────────────────────────
+_FOURIER_TYPES = ("F-CRAB", "fourier", "positive fourier", "squared fourier")
+_POSITIVE_TYPES = ("positive fourier", "squared fourier")
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 class JaxSchedule:
@@ -18,6 +22,13 @@ class JaxSchedule:
     Mirrors the Schedule class in schedule_utils.py.
     Stores parameters as numpy arrays for scipy compatibility,
     converts to jax internally only when needed.
+
+    Schedule types
+    --------------
+    'fourier'          : F-CRAB/Fourier correction — can go negative
+    'F-CRAB'           : same as fourier with randomised frequencies
+    'positive fourier' : Fourier + softplus — guaranteed positive schedules
+    'power law'        : polynomial correction
     """
 
     def __init__(
@@ -27,7 +38,7 @@ class JaxSchedule:
         number_of_parameters: int,
         nsteps: int,
         seed: Optional[int] = None,
-        mode: Optional[str] = 'annealing ansatz',
+        mode: Optional[str] = "annealing ansatz",
         random: Optional[bool] = False,
     ):
         self.tf = tf
@@ -40,8 +51,8 @@ class JaxSchedule:
 
         dim = number_of_parameters
 
-        # ── parameter vector sizing (mirrors schedule_utils.py) ───────────────
-        if self.type in ('F-CRAB', 'fourier'):
+        # ── parameter vector sizing ───────────────────────────────────────────
+        if self.type in _FOURIER_TYPES:
             n_params = 4 * dim
         else:  # power law
             n_params = 2 * dim
@@ -52,43 +63,60 @@ class JaxSchedule:
             self.parameters = rng.uniform(-2, 2, size=n_params)
 
         # ── frequencies ───────────────────────────────────────────────────────
-        if self.type in ('F-CRAB', 'fourier'):
-            rng = np.random.default_rng(seed)
-            self.omegas = (
-                2 * np.pi * np.arange(1, dim + 1)
-                * (1 + rng.uniform(-0.5, 0.5, dim))
-                / self.tf
-            )
-
+        if self.type in _FOURIER_TYPES:
+            if self.type == "F-CRAB":
+                # random perturbation around harmonics — avoids local traps
+                rng = np.random.default_rng(seed)
+                self.omegas = (
+                    2
+                    * np.pi
+                    * np.arange(1, dim + 1)
+                    * (1 + rng.uniform(-0.5, 0.5, dim))
+                    / self.tf
+                )
+            else:
+                # exact harmonics: 2π k / tf  for k = 1, ..., dim
+                # applies to 'fourier', 'positive fourier', 'squared fourier'
+                self.omegas = 2 * np.pi * np.arange(1, dim + 1) / self.tf
         # ── precompute jax constants (time, basis) ────────────────────────────
-        self._time_jax   = jnp.array(self.time)
-        if self.type in ('F-CRAB', 'fourier'):
-            _omegas          = jnp.array(self.omegas)
-            self._sin_basis  = jnp.sin(jnp.outer(_omegas, self._time_jax))  # (dim, nsteps)
-            self._cos_basis  = jnp.cos(jnp.outer(_omegas, self._time_jax))
-        elif self.type == 'power law':
-            exponents        = jnp.arange(1, dim + 1)[:, None]
-            self._pw_basis   = (self._time_jax[None, :] / tf) ** exponents   # (dim, nsteps)
+        self._time_jax = jnp.array(self.time)
+
+        if self.type in _FOURIER_TYPES:
+            _omegas = jnp.array(self.omegas)
+            self._sin_basis = jnp.sin(
+                jnp.outer(_omegas, self._time_jax)
+            )  # (dim, nsteps)
+            self._cos_basis = jnp.cos(jnp.outer(_omegas, self._time_jax))
+        elif self.type == "power law":
+            exponents = jnp.arange(1, dim + 1)[:, None]
+            self._pw_basis = (
+                self._time_jax[None, :] / tf
+            ) ** exponents  # (dim, nsteps)
+
+        # ── softplus normalisation constant (for 'positive fourier') ─────────
+        # softplus(1) ~ 1.3133 — used to rescale so zero-params -> linear ramp
+        if self.type in _POSITIVE_TYPES:
+            self._sp_norm = float(jax.nn.softplus(jnp.ones(1))[0])
 
     # ─────────────────────────────────────────────────────────────────────────
     def get_driving(self) -> tuple:
         """Returns (h_driver, h_target) as numpy arrays — drop-in replacement."""
-        h_driver_jax, h_target_jax = self._get_driving_jax(
-            jnp.array(self.parameters)
-        )
+        h_driver_jax, h_target_jax = self._get_driving_jax(jnp.array(self.parameters))
         return np.array(h_driver_jax), np.array(h_target_jax)
 
     def _get_driving_jax(self, parameters: jnp.ndarray) -> tuple:
-        """Internal JAX version — differentiable."""
+        """Internal JAX version — fully differentiable."""
         dim = self.number_parameters
-        t   = self._time_jax
-        tf  = self.tf
+        t = self._time_jax
+        tf = self.tf
 
-        if self.type in ('F-CRAB', 'fourier'):
-            a_drv = parameters[        : dim  ]
-            b_drv = parameters[  dim   : 2*dim]
-            a_tgt = parameters[2*dim   : 3*dim]
-            b_tgt = parameters[3*dim   : 4*dim]
+        if self.type in ("F-CRAB", "fourier"):
+            # ── standard Fourier / F-CRAB — can go negative ───────────────────
+            a_drv = parameters[:dim]
+            b_drv = parameters[dim : 2 * dim]
+            a_tgt = parameters[2 * dim : 3 * dim]
+            b_tgt = parameters[3 * dim : 4 * dim]
+
             corr_driver = jnp.mean(
                 a_drv[:, None] * self._sin_basis + b_drv[:, None] * self._cos_basis,
                 axis=0,
@@ -97,16 +125,63 @@ class JaxSchedule:
                 a_tgt[:, None] * self._sin_basis + b_tgt[:, None] * self._cos_basis,
                 axis=0,
             )
-        else:  # power law
-            corr_driver = jnp.mean(
-                parameters[:dim, None] * self._pw_basis, axis=0
+
+            h_driver = (1 - t / tf) * (1 + corr_driver)
+            h_target = (t / tf) * (1 + corr_target)
+
+        elif self.type == "positive fourier":
+            # ── softplus-wrapped Fourier — strictly positive ───────────────────
+            # h(t) = ramp(t) * softplus(1 + Fourier_correction) / softplus(1)
+            #
+            # Properties:
+            #   - h(t) > 0  always  (softplus > 0)
+            #   - parameters = 0  ->  h = ramp  (linear annealing recovered)
+            #   - smooth, differentiable everywhere
+            a_drv = parameters[:dim]
+            b_drv = parameters[dim : 2 * dim]
+            a_tgt = parameters[2 * dim : 3 * dim]
+            b_tgt = parameters[3 * dim : 4 * dim]
+
+            raw_driver = jnp.mean(
+                a_drv[:, None] * self._sin_basis + b_drv[:, None] * self._cos_basis,
+                axis=0,
             )
-            corr_target = jnp.mean(
-                parameters[dim:2*dim, None] * self._pw_basis, axis=0
+            raw_target = jnp.mean(
+                a_tgt[:, None] * self._sin_basis + b_tgt[:, None] * self._cos_basis,
+                axis=0,
             )
 
-        h_driver = (1 - t / tf) * (1 + corr_driver)
-        h_target = (t / tf)     * (1 + corr_target)
+            # softplus shift by +1 so near-zero params ~ linear ramp
+            h_driver = (1 - t / tf) * jax.nn.softplus(1 + raw_driver) / self._sp_norm
+            h_target = (t / tf) * jax.nn.softplus(1 + raw_target) / self._sp_norm
+
+        elif self.type == "squared fourier":
+            a_drv = parameters[:dim]
+            b_drv = parameters[dim : 2 * dim]
+            a_tgt = parameters[2 * dim : 3 * dim]
+            b_tgt = parameters[3 * dim : 4 * dim]
+
+            raw_driver = jnp.mean(
+                a_drv[:, None] * self._sin_basis + b_drv[:, None] * self._cos_basis,
+                axis=0,
+            )
+            raw_target = jnp.mean(
+                a_tgt[:, None] * self._sin_basis + b_tgt[:, None] * self._cos_basis,
+                axis=0,
+            )
+            # (1 + raw)^2 → always positive, =1 at zero params
+            h_driver = (1 - t / tf) * (1 + raw_driver) ** 2
+            h_target = (t / tf) * (1 + raw_target) ** 2
+
+        else:  # power law
+            corr_driver = jnp.mean(parameters[:dim, None] * self._pw_basis, axis=0)
+            corr_target = jnp.mean(
+                parameters[dim : 2 * dim, None] * self._pw_basis, axis=0
+            )
+
+            h_driver = (1 - t / tf) * (1 + corr_driver)
+            h_target = (t / tf) * (1 + corr_target)
+
         return h_driver, h_target
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -115,8 +190,8 @@ class JaxSchedule:
             self.parameters = parameters.copy()
         else:
             raise ValueError(
-                f'Shape mismatch: got {parameters.shape[0]}, '
-                f'expected {self.parameters.shape[0]}'
+                f"Shape mismatch: got {parameters.shape[0]}, "
+                f"expected {self.parameters.shape[0]}"
             )
 
 
@@ -128,6 +203,8 @@ class JaxSchedulerModel(JaxSchedule):
     - Provides exact gradients via jax.grad — no finite differences
     - All public outputs (psi, energy, history, get_driving) are numpy arrays
       so the rest of your pipeline works without changes
+
+    Supported types: 'fourier', 'F-CRAB', 'positive fourier', 'power law'
     """
 
     def __init__(
@@ -141,12 +218,12 @@ class JaxSchedulerModel(JaxSchedule):
         nsteps: int,
         type: str,
         seed: int,
-        mode: Optional[str] = 'annealing ansatz',
+        mode: Optional[str] = "annealing ansatz",
         random: Optional[bool] = False,
     ):
-        self.initial_state        = initial_state
-        self.target_hamiltonian   = target_hamiltonian
-        self.initial_hamiltonian  = initial_hamiltonian
+        self.initial_state = initial_state
+        self.target_hamiltonian = target_hamiltonian
+        self.initial_hamiltonian = initial_hamiltonian
         self.reference_hamiltonian = reference_hamiltonian
 
         super().__init__(
@@ -160,45 +237,43 @@ class JaxSchedulerModel(JaxSchedule):
         )
 
         # ── convert sparse hamiltonians to dense jax arrays ───────────────────
-        self._H_driver = jnp.array(initial_hamiltonian.toarray(),  dtype=jnp.complex128)
-        self._H_target = jnp.array(target_hamiltonian.toarray(),   dtype=jnp.complex128)
-        self._H_ref    = jnp.array(reference_hamiltonian.toarray(), dtype=jnp.complex128)
-        self._psi_init = jnp.array(initial_state,                  dtype=jnp.complex128)
-        self._dt       = jnp.float64(self.time[1] - self.time[0])
+        self._H_driver = jnp.array(initial_hamiltonian.toarray(), dtype=jnp.complex128)
+        self._H_target = jnp.array(target_hamiltonian.toarray(), dtype=jnp.complex128)
+        self._H_ref = jnp.array(reference_hamiltonian.toarray(), dtype=jnp.complex128)
+        self._psi_init = jnp.array(initial_state, dtype=jnp.complex128)
+        self._dt = jnp.float64(self.time[1] - self.time[0])
 
         # ── compile forward + gradient ────────────────────────────────────────
         self._forward_jax = jax.jit(self._build_forward())
-        self._grad_jax    = jax.jit(jax.grad(self._build_forward()))
+        self._grad_jax = jax.jit(jax.grad(self._build_forward()))
 
         # warm up JIT
         _p = jnp.array(self.parameters)
         self._forward_jax(_p).block_until_ready()
         self._grad_jax(_p).block_until_ready()
-        print('JIT compilation done.')
+        print("JIT compilation done.")
 
         # ── state ─────────────────────────────────────────────────────────────
         self.energy = 1000.0
-        self.psi    = None
+        self.psi = None
 
         # memory — all stored as numpy for compatibility
-        self.history            = []
-        self.history_psi        = []
-        self.history_drivings   = []
+        self.history = []
+        self.history_psi = []
+        self.history_drivings = []
         self.history_parameters = []
-        self.history_run        = []
-        self.run_number         = 0
+        self.history_run = []
+        self.run_number = 0
 
     # ─────────────────────────────────────────────────────────────────────────
     def _build_forward(self):
         """Closure that captures jax arrays — returns a pure jax function."""
-        H_driver  = self._H_driver
-        H_target  = self._H_target
-        H_ref     = self._H_ref
-        psi_init  = self._psi_init
-        dt        = self._dt
-        nsteps    = self.nsteps
-
-        # capture schedule internals
+        H_driver = self._H_driver
+        H_target = self._H_target
+        H_ref = self._H_ref
+        psi_init = self._psi_init
+        dt = self._dt
+        nsteps = self.nsteps
         get_driving = self._get_driving_jax
 
         def forward(parameters):
@@ -226,8 +301,6 @@ class JaxSchedulerModel(JaxSchedule):
 
         energy = float(self._forward_jax(p))
         self.energy = energy
-
-        # also update psi by re-running the scan and capturing final state
         self.psi = self._get_final_psi(p)
         self.run_number += 1
         return energy
@@ -255,16 +328,83 @@ class JaxSchedulerModel(JaxSchedule):
     def callback(self, *args):
         self.history.append(self.energy)
         self.history_parameters.append(self.parameters.copy())
-        self.history_drivings.append(self.get_driving())       # numpy
+        self.history_drivings.append(self.get_driving())
         self.history_psi.append(self.psi.copy())
         self.history_run.append(self.run_number)
         print(self.energy)
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+class JaxTrainer:
+    """
+    Handles optimization of a JaxSchedulerModel.
+    Call trainer.run() and get results back as plain numpy/python objects.
+    """
 
+    def __init__(
+        self,
+        model: JaxSchedulerModel,
+        maxiter: int = 1000,
+        tol: float = 1e-6,
+        ftol: float = 1e-9,
+        gtol: float = 1e-6,
+        verbose: bool = True,
+    ):
+        self.model = model
+        self.maxiter = maxiter
+        self.tol = tol
+        self.ftol = ftol
+        self.gtol = gtol
+        self.verbose = verbose
+        self.result = None
 
+    # ─────────────────────────────────────────────────────────────────────────
+    def run(self) -> dict:
+        """
+        Run L-BFGS-B with exact gradients.
+        Returns a dict with all results as numpy arrays — no jax objects.
+        """
+        res = minimize(
+            self.model.forward,
+            self.model.parameters,
+            jac=self.model.gradient,
+            method="L-BFGS-B",
+            tol=self.tol,
+            callback=self.model.callback if self.verbose else None,
+            options={
+                "maxiter": self.maxiter,
+                "ftol": self.ftol,
+                "gtol": self.gtol,
+            },
+        )
+        self.result = res
 
-jax.config.update("jax_enable_x64", True)
+        # final forward pass to sync model state
+        self.model.forward(res.x)
+        h_driver, h_target = self.model.get_driving()
+
+        if self.verbose:
+            print(f"\nOptimization success : {res.success}")
+            print(f"Final energy         : {res.fun:.6f}")
+            print(f"Message              : {res.message}")
+
+        return {
+            "success": bool(res.success),
+            "message": res.message,
+            "n_iterations": int(res.nit),
+            "n_evals": int(res.nfev),
+            "energy": float(res.fun),
+            "parameters": np.array(res.x),
+            "psi": self.model.psi.copy(),
+            "h_driver": h_driver,
+            "h_target": h_target,
+            "time": self.model.time.copy(),
+            "history_energy": list(self.model.history),
+            "history_parameters": [p.copy() for p in self.model.history_parameters],
+            "history_drivings": self.model.history_drivings,
+            "history_psi": [p.copy() for p in self.model.history_psi],
+        }
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Core idea:
@@ -279,6 +419,7 @@ jax.config.update("jax_enable_x64", True)
 # This is O(2^n) per Pauli — but we can vectorize over all 4^n Paulis at once.
 # ─────────────────────────────────────────────────────────────────────────────
 
+
 def _build_binary_reps(n: int):
     """
     Build all 4^n Pauli labels as (a, b) pairs where a,b in {0,1}^n.
@@ -286,21 +427,21 @@ def _build_binary_reps(n: int):
         a_vecs : (4^n, n) int8 array — X part of each Pauli
         b_vecs : (4^n, n) int8 array — Z part of each Pauli
     """
-    n_paulis = 4 ** n
+    n_paulis = 4**n
     # enumerate all (a, b) pairs in base-4: digit k -> (a_k, b_k)
     # 0=I(00), 1=X(10), 2=Y(11), 3=Z(01)
-    pauli_map = np.array([[0,0],[1,0],[1,1],[0,1]], dtype=np.int8)  # (4, 2)
+    pauli_map = np.array([[0, 0], [1, 0], [1, 1], [0, 1]], dtype=np.int8)  # (4, 2)
 
     indices = np.arange(n_paulis, dtype=np.int32)
-    a_vecs  = np.zeros((n_paulis, n), dtype=np.int8)
-    b_vecs  = np.zeros((n_paulis, n), dtype=np.int8)
+    a_vecs = np.zeros((n_paulis, n), dtype=np.int8)
+    b_vecs = np.zeros((n_paulis, n), dtype=np.int8)
 
     tmp = indices.copy()
     for k in range(n - 1, -1, -1):
-        digit         = tmp % 4
-        a_vecs[:, k]  = pauli_map[digit, 0]
-        b_vecs[:, k]  = pauli_map[digit, 1]
-        tmp           = tmp // 4
+        digit = tmp % 4
+        a_vecs[:, k] = pauli_map[digit, 0]
+        b_vecs[:, k] = pauli_map[digit, 1]
+        tmp = tmp // 4
 
     return a_vecs, b_vecs
 
@@ -312,22 +453,24 @@ def _build_xor_table(n: int):
     Returns a_int : (4^n,) int32 array — integer representation of X parts.
     """
     a_vecs, b_vecs = _build_binary_reps(n)
-    n_paulis = 4 ** n
-    dim      = 2 ** n
+    n_paulis = 4**n
+    dim = 2**n
 
     # integer representation of a (X part) — for XOR
-    powers   = (2 ** np.arange(n - 1, -1, -1)).astype(np.int32)
-    a_int    = (a_vecs @ powers).astype(np.int32)   # (4^n,)
+    powers = (2 ** np.arange(n - 1, -1, -1)).astype(np.int32)
+    a_int = (a_vecs @ powers).astype(np.int32)  # (4^n,)
 
     # integer dot product b.x for all x and all Paulis
     # b_dot_x[p, x] = sum_k b_vecs[p,k] * bit_k(x)   mod 2
     # We'll compute this as a (4^n, 2^n) binary matrix
-    x_vals   = np.arange(dim, dtype=np.int32)        # (2^n,)
+    x_vals = np.arange(dim, dtype=np.int32)  # (2^n,)
     # bit_matrix[x, k] = k-th bit of x
-    bit_matrix = ((x_vals[:, None] >> np.arange(n-1, -1, -1)[None, :]) & 1).astype(np.int8)
+    bit_matrix = ((x_vals[:, None] >> np.arange(n - 1, -1, -1)[None, :]) & 1).astype(
+        np.int8
+    )
     # b_dot_x[p, x] = (b_vecs[p] . bit_matrix[x]) mod 2
-    b_dot_x  = (b_vecs @ bit_matrix.T) % 2           # (4^n, 2^n)
-    signs    = 1 - 2 * b_dot_x                        # (4^n, 2^n): +1 or -1
+    b_dot_x = (b_vecs @ bit_matrix.T) % 2  # (4^n, 2^n)
+    signs = 1 - 2 * b_dot_x  # (4^n, 2^n): +1 or -1
 
     return a_int, signs
 
@@ -356,24 +499,25 @@ class SREJax:
     """
 
     def __init__(self, n_qubits: int, batch_size: int = 4096):
-        self.n          = n_qubits
-        self.dim        = 2 ** n_qubits
-        self.n_paulis   = 4 ** n_qubits
+        self.n = n_qubits
+        self.dim = 2**n_qubits
+        self.n_paulis = 4**n_qubits
         self.batch_size = batch_size
 
-        print(f'Building Pauli tables for n={n_qubits} ({self.n_paulis} Paulis)...')
+        print(f"Building Pauli tables for n={n_qubits} ({self.n_paulis} Paulis)...")
         a_int, signs = _build_xor_table(n_qubits)
 
         # store as jax arrays
-        self._a_int  = jnp.array(a_int,  dtype=jnp.int32)    # (4^n,)
-        self._signs  = jnp.array(signs,  dtype=jnp.float64)   # (4^n, 2^n)
-        self._x_idx  = jnp.arange(self.dim, dtype=jnp.int32)  # (2^n,)
-        print('Done.')
+        self._a_int = jnp.array(a_int, dtype=jnp.int32)  # (4^n,)
+        self._signs = jnp.array(signs, dtype=jnp.float64)  # (4^n, 2^n)
+        self._x_idx = jnp.arange(self.dim, dtype=jnp.int32)  # (2^n,)
+        print("Done.")
 
     # ─────────────────────────────────────────────────────────────────────────
     @partial(jax.jit, static_argnums=(0,))
-    def _xi_batch(self, psi: jnp.ndarray, a_int_batch: jnp.ndarray,
-                  signs_batch: jnp.ndarray) -> jnp.ndarray:
+    def _xi_batch(
+        self, psi: jnp.ndarray, a_int_batch: jnp.ndarray, signs_batch: jnp.ndarray
+    ) -> jnp.ndarray:
         """
         Compute <psi|P|psi> for a batch of Paulis.
         psi          : (2^n,) complex
@@ -384,16 +528,16 @@ class SREJax:
         # psi[x XOR a] for each Pauli in batch: shape (batch, 2^n)
         x_xor_a = jnp.bitwise_xor(
             self._x_idx[None, :], a_int_batch[:, None]
-        )                                               # (batch, 2^n)
-        psi_flipped = psi[x_xor_a]                    # (batch, 2^n) complex
+        )  # (batch, 2^n)
+        psi_flipped = psi[x_xor_a]  # (batch, 2^n) complex
 
         # <psi|P|psi> = sum_x conj(psi[x]) * sign[x] * psi[x XOR a]
         xi = jnp.einsum(
-            'x,px,px->p',
+            "x,px,px->p",
             psi.conj(),
             signs_batch,
             psi_flipped,
-        ).real                                          # (batch,) float64
+        ).real  # (batch,) float64
 
         return xi
 
@@ -404,15 +548,17 @@ class SREJax:
         Returns numpy array of shape (4^n,).
         """
         psi = jnp.array(psi / np.linalg.norm(psi), dtype=jnp.complex128)
-        xi  = np.zeros(self.n_paulis, dtype=np.float64)
+        xi = np.zeros(self.n_paulis, dtype=np.float64)
 
         for start in range(0, self.n_paulis, self.batch_size):
-            end   = min(start + self.batch_size, self.n_paulis)
-            xi[start:end] = np.array(self._xi_batch(
-                psi,
-                self._a_int[start:end],
-                self._signs[start:end],
-            ))
+            end = min(start + self.batch_size, self.n_paulis)
+            xi[start:end] = np.array(
+                self._xi_batch(
+                    psi,
+                    self._a_int[start:end],
+                    self._signs[start:end],
+                )
+            )
 
         return xi
 
@@ -422,11 +568,10 @@ class SREJax:
         M_2(psi) = -log(sum_P Xi(P)^4) - n*log(2)
         """
         xi = self.characteristic_function(psi)
-        return float(-np.log(np.sum(xi ** 4)) + self.n * np.log(2))
+        return float(-np.log(np.sum(xi**4)) + self.n * np.log(2))
 
     # ─────────────────────────────────────────────────────────────────────────
-    def along_path(self, psi_history: np.ndarray,
-                   verbose: bool = True) -> np.ndarray:
+    def along_path(self, psi_history: np.ndarray, verbose: bool = True) -> np.ndarray:
         """
         Compute M_2 along a full annealing trajectory.
 
@@ -434,18 +579,19 @@ class SREJax:
         Returns     : (nsteps,) float64 array
         """
         nsteps = psi_history.shape[0]
-        m2     = np.zeros(nsteps)
+        m2 = np.zeros(nsteps)
 
         for i in range(nsteps):
             m2[i] = self(psi_history[i])
             if verbose and i % 10 == 0:
-                print(f'  SRE step {i}/{nsteps}: M2={m2[i]:.4f}')
+                print(f"  SRE step {i}/{nsteps}: M2={m2[i]:.4f}")
 
         return m2
 
     # ─────────────────────────────────────────────────────────────────────────
-    def along_path_fast(self, psi_history: np.ndarray,
-                        verbose: bool = True) -> np.ndarray:
+    def along_path_fast(
+        self, psi_history: np.ndarray, verbose: bool = True
+    ) -> np.ndarray:
         """
         Faster version: processes all time steps together per Pauli batch.
         Better cache usage when nsteps is large.
@@ -454,30 +600,31 @@ class SREJax:
         Returns     : (nsteps,) float64 array
         """
         nsteps = psi_history.shape[0]
-        norms  = np.linalg.norm(psi_history, axis=1, keepdims=True)
-        psi_n  = jnp.array(psi_history / norms, dtype=jnp.complex128)
+        norms = np.linalg.norm(psi_history, axis=1, keepdims=True)
+        psi_n = jnp.array(psi_history / norms, dtype=jnp.complex128)
 
         # sum_P xi^4 accumulated over batches
         sum_xi4 = np.zeros(nsteps, dtype=np.float64)
 
         for start in range(0, self.n_paulis, self.batch_size):
-            end          = min(start + self.batch_size, self.n_paulis)
-            a_batch      = self._a_int[start:end]     # (batch,)
-            signs_batch  = self._signs[start:end]     # (batch, 2^n)
+            end = min(start + self.batch_size, self.n_paulis)
+            a_batch = self._a_int[start:end]  # (batch,)
+            signs_batch = self._signs[start:end]  # (batch, 2^n)
 
             # compute xi for all time steps and this Pauli batch
             # xi[t, p] = <psi_t|P_p|psi_t>
-            xi_batch = np.array(jax.vmap(
-                lambda psi: self._xi_batch(psi, a_batch, signs_batch)
-            )(psi_n))                                  # (nsteps, batch)
+            xi_batch = np.array(
+                jax.vmap(lambda psi: self._xi_batch(psi, a_batch, signs_batch))(psi_n)
+            )  # (nsteps, batch)
 
-            sum_xi4 += np.sum(xi_batch ** 4, axis=1)  # (nsteps,)
+            sum_xi4 += np.sum(xi_batch**4, axis=1)  # (nsteps,)
 
             if verbose and start % (self.batch_size * 10) == 0:
-                print(f'  Pauli batch {start}/{self.n_paulis}')
+                print(f"  Pauli batch {start}/{self.n_paulis}")
 
         m2 = -np.log(sum_xi4) + self.n * np.log(2)
         return m2
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 class JaxTrainer:
@@ -495,13 +642,13 @@ class JaxTrainer:
         gtol: float = 1e-6,
         verbose: bool = True,
     ):
-        self.model   = model
+        self.model = model
         self.maxiter = maxiter
-        self.tol     = tol
-        self.ftol    = ftol
-        self.gtol    = gtol
+        self.tol = tol
+        self.ftol = ftol
+        self.gtol = gtol
         self.verbose = verbose
-        self.result  = None
+        self.result = None
 
     # ─────────────────────────────────────────────────────────────────────────
     def run(self) -> dict:
@@ -513,13 +660,13 @@ class JaxTrainer:
             self.model.forward,
             self.model.parameters,
             jac=self.model.gradient,
-            method='L-BFGS-B',
+            method="L-BFGS-B",
             tol=self.tol,
             callback=self.model.callback if self.verbose else None,
             options={
-                'maxiter': self.maxiter,
-                'ftol'   : self.ftol,
-                'gtol'   : self.gtol,
+                "maxiter": self.maxiter,
+                "ftol": self.ftol,
+                "gtol": self.gtol,
             },
         )
         self.result = res
@@ -529,26 +676,26 @@ class JaxTrainer:
         h_driver, h_target = self.model.get_driving()
 
         if self.verbose:
-            print(f'\nOptimization success : {res.success}')
-            print(f'Final energy         : {res.fun:.6f}')
-            print(f'Message              : {res.message}')
+            print(f"\nOptimization success : {res.success}")
+            print(f"Final energy         : {res.fun:.6f}")
+            print(f"Message              : {res.message}")
 
         return {
             # optimization results
-            'success'      : bool(res.success),
-            'message'      : res.message,
-            'n_iterations' : int(res.nit),
-            'n_evals'      : int(res.nfev),
+            "success": bool(res.success),
+            "message": res.message,
+            "n_iterations": int(res.nit),
+            "n_evals": int(res.nfev),
             # physics results — all numpy
-            'energy'       : float(res.fun),
-            'parameters'   : np.array(res.x),
-            'psi'          : self.model.psi.copy(),          # numpy complex128
-            'h_driver'     : h_driver,                       # numpy float64
-            'h_target'     : h_target,
-            'time'         : self.model.time.copy(),
+            "energy": float(res.fun),
+            "parameters": np.array(res.x),
+            "psi": self.model.psi.copy(),  # numpy complex128
+            "h_driver": h_driver,  # numpy float64
+            "h_target": h_target,
+            "time": self.model.time.copy(),
             # full history
-            'history_energy'     : list(self.model.history),
-            'history_parameters' : [p.copy() for p in self.model.history_parameters],
-            'history_drivings'   : self.model.history_drivings,
-            'history_psi'        : [p.copy() for p in self.model.history_psi],
+            "history_energy": list(self.model.history),
+            "history_parameters": [p.copy() for p in self.model.history_parameters],
+            "history_drivings": self.model.history_drivings,
+            "history_psi": [p.copy() for p in self.model.history_psi],
         }
