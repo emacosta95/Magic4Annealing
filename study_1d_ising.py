@@ -401,7 +401,7 @@ def main():
         )
 
     elif args.study == "size":
-        nqubits_list = [4, 6, 8, 10]
+        nqubits_list = [4, 6, 8, 10, 12]
         study_vs_size(
             tau=args.tau,
             n_params=args.n_params,
