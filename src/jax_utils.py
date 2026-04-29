@@ -406,6 +406,8 @@ class JaxTrainer:
         }
 
 
+##### MEMORY INEFFICIENT CODE
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Core idea:
 # Every n-qubit Pauli P = i^k * X^a Z^b  where a,b in {0,1}^n
@@ -420,213 +422,329 @@ class JaxTrainer:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def _build_binary_reps(n: int):
-    """
-    Build all 4^n Pauli labels as (a, b) pairs where a,b in {0,1}^n.
-    Returns:
-        a_vecs : (4^n, n) int8 array — X part of each Pauli
-        b_vecs : (4^n, n) int8 array — Z part of each Pauli
-    """
-    n_paulis = 4**n
-    # enumerate all (a, b) pairs in base-4: digit k -> (a_k, b_k)
-    # 0=I(00), 1=X(10), 2=Y(11), 3=Z(01)
-    pauli_map = np.array([[0, 0], [1, 0], [1, 1], [0, 1]], dtype=np.int8)  # (4, 2)
+# def _build_binary_reps(n: int):
+#     """
+#     Build all 4^n Pauli labels as (a, b) pairs where a,b in {0,1}^n.
+#     Returns:
+#         a_vecs : (4^n, n) int8 array — X part of each Pauli
+#         b_vecs : (4^n, n) int8 array — Z part of each Pauli
+#     """
+#     n_paulis = 4**n
+#     # enumerate all (a, b) pairs in base-4: digit k -> (a_k, b_k)
+#     # 0=I(00), 1=X(10), 2=Y(11), 3=Z(01)
+#     pauli_map = np.array([[0, 0], [1, 0], [1, 1], [0, 1]], dtype=np.int8)  # (4, 2)
 
+#     indices = np.arange(n_paulis, dtype=np.int32)
+#     a_vecs = np.zeros((n_paulis, n), dtype=np.int8)
+#     b_vecs = np.zeros((n_paulis, n), dtype=np.int8)
+
+#     tmp = indices.copy()
+#     for k in range(n - 1, -1, -1):
+#         digit = tmp % 4
+#         a_vecs[:, k] = pauli_map[digit, 0]
+#         b_vecs[:, k] = pauli_map[digit, 1]
+#         tmp = tmp // 4
+
+#     return a_vecs, b_vecs
+
+
+# def _build_xor_table(n: int):
+#     """
+#     Precompute XOR table: for each basis index x (0..2^n-1) and each Pauli a,
+#     we need x XOR a_int where a_int = sum_k a_k * 2^(n-1-k).
+#     Returns a_int : (4^n,) int32 array — integer representation of X parts.
+#     """
+#     a_vecs, b_vecs = _build_binary_reps(n)
+#     n_paulis = 4**n
+#     dim = 2**n
+
+#     # integer representation of a (X part) — for XOR
+#     powers = (2 ** np.arange(n - 1, -1, -1)).astype(np.int32)
+#     a_int = (a_vecs @ powers).astype(np.int32)  # (4^n,)
+
+#     # integer dot product b.x for all x and all Paulis
+#     # b_dot_x[p, x] = sum_k b_vecs[p,k] * bit_k(x)   mod 2
+#     # We'll compute this as a (4^n, 2^n) binary matrix
+#     x_vals = np.arange(dim, dtype=np.int32)  # (2^n,)
+#     # bit_matrix[x, k] = k-th bit of x
+#     bit_matrix = ((x_vals[:, None] >> np.arange(n - 1, -1, -1)[None, :]) & 1).astype(
+#         np.int8
+#     )
+#     # b_dot_x[p, x] = (b_vecs[p] . bit_matrix[x]) mod 2
+#     b_dot_x = (b_vecs @ bit_matrix.T) % 2  # (4^n, 2^n)
+#     signs = 1 - 2 * b_dot_x  # (4^n, 2^n): +1 or -1
+
+#     return a_int, signs
+
+
+# class SREJax:
+#     """
+#     Stabilizer Rényi Entropy at n=2 using JAX.
+
+#     M_2(psi) = -log(sum_P <psi|P|psi>^4) - n*log(2)
+
+#     Algorithm:
+#         For each Pauli P = X^a Z^b:
+#             <psi|P|psi> = sum_x psi*(x) * (-1)^{x.b} * psi(x XOR a)
+#                         = sum_x conj(psi[x]) * sign[x] * psi[x XOR a]
+
+#     This vectorizes over all 4^n Paulis simultaneously using precomputed
+#     XOR indices and sign tables — no matrix exponentiation, no dense Pauli
+#     tensor, memory scales as O(4^n + 2^n) not O(4^n * 2^n * 2^n).
+
+#     Parameters
+#     ----------
+#     n_qubits : int
+#     batch_size : int
+#         Number of Paulis to process per JAX call. Tune to fit GPU/CPU memory.
+#         Default 4096 works well for n=10 on CPU.
+#     """
+
+#     def __init__(self, n_qubits: int, batch_size: int = 4096):
+#         self.n = n_qubits
+#         self.dim = 2**n_qubits
+#         self.n_paulis = 4**n_qubits
+#         self.batch_size = batch_size
+
+#         print(f"Building Pauli tables for n={n_qubits} ({self.n_paulis} Paulis)...")
+#         a_int, signs = _build_xor_table(n_qubits)
+
+#         # store as jax arrays
+#         self._a_int = jnp.array(a_int, dtype=jnp.int32)  # (4^n,)
+#         self._signs = jnp.array(signs, dtype=jnp.float64)  # (4^n, 2^n)
+#         self._x_idx = jnp.arange(self.dim, dtype=jnp.int32)  # (2^n,)
+#         print("Done.")
+
+#     # ─────────────────────────────────────────────────────────────────────────
+#     @partial(jax.jit, static_argnums=(0,))
+#     def _xi_batch(
+#         self, psi: jnp.ndarray, a_int_batch: jnp.ndarray, signs_batch: jnp.ndarray
+#     ) -> jnp.ndarray:
+#         """
+#         Compute <psi|P|psi> for a batch of Paulis.
+#         psi          : (2^n,) complex
+#         a_int_batch  : (batch,) int32
+#         signs_batch  : (batch, 2^n) float64
+#         Returns      : (batch,) float64
+#         """
+#         # psi[x XOR a] for each Pauli in batch: shape (batch, 2^n)
+#         x_xor_a = jnp.bitwise_xor(
+#             self._x_idx[None, :], a_int_batch[:, None]
+#         )  # (batch, 2^n)
+#         psi_flipped = psi[x_xor_a]  # (batch, 2^n) complex
+
+#         # <psi|P|psi> = sum_x conj(psi[x]) * sign[x] * psi[x XOR a]
+#         xi = jnp.einsum(
+#             "x,px,px->p",
+#             psi.conj(),
+#             signs_batch,
+#             psi_flipped,
+#         ).real  # (batch,) float64
+
+#         return xi
+
+#     # ─────────────────────────────────────────────────────────────────────────
+#     def characteristic_function(self, psi: np.ndarray) -> np.ndarray:
+#         """
+#         Compute Xi(P) = <psi|P|psi> for all 4^n Paulis.
+#         Returns numpy array of shape (4^n,).
+#         """
+#         psi = jnp.array(psi / np.linalg.norm(psi), dtype=jnp.complex128)
+#         xi = np.zeros(self.n_paulis, dtype=np.float64)
+
+#         for start in range(0, self.n_paulis, self.batch_size):
+#             end = min(start + self.batch_size, self.n_paulis)
+#             xi[start:end] = np.array(
+#                 self._xi_batch(
+#                     psi,
+#                     self._a_int[start:end],
+#                     self._signs[start:end],
+#                 )
+#             )
+
+#         return xi
+
+#     # ─────────────────────────────────────────────────────────────────────────
+#     def __call__(self, psi: np.ndarray) -> float:
+#         """
+#         M_2(psi) = -log(sum_P Xi(P)^4) - n*log(2)
+#         """
+#         xi = self.characteristic_function(psi)
+#         return float(-np.log(np.sum(xi**4)) + self.n * np.log(2))
+
+#     # ─────────────────────────────────────────────────────────────────────────
+#     def along_path(self, psi_history: np.ndarray, verbose: bool = True) -> np.ndarray:
+#         """
+#         Compute M_2 along a full annealing trajectory.
+
+#         psi_history : (nsteps, 2^n) complex array
+#         Returns     : (nsteps,) float64 array
+#         """
+#         nsteps = psi_history.shape[0]
+#         m2 = np.zeros(nsteps)
+
+#         for i in range(nsteps):
+#             m2[i] = self(psi_history[i])
+#             if verbose and i % 10 == 0:
+#                 print(f"  SRE step {i}/{nsteps}: M2={m2[i]:.4f}")
+
+#         return m2
+
+#     # ─────────────────────────────────────────────────────────────────────────
+#     def along_path_fast(
+#         self, psi_history: np.ndarray, verbose: bool = True
+#     ) -> np.ndarray:
+#         """
+#         Faster version: processes all time steps together per Pauli batch.
+#         Better cache usage when nsteps is large.
+
+#         psi_history : (nsteps, 2^n) complex array
+#         Returns     : (nsteps,) float64 array
+#         """
+#         nsteps = psi_history.shape[0]
+#         norms = np.linalg.norm(psi_history, axis=1, keepdims=True)
+#         psi_n = jnp.array(psi_history / norms, dtype=jnp.complex128)
+
+#         # sum_P xi^4 accumulated over batches
+#         sum_xi4 = np.zeros(nsteps, dtype=np.float64)
+
+#         for start in range(0, self.n_paulis, self.batch_size):
+#             end = min(start + self.batch_size, self.n_paulis)
+#             a_batch = self._a_int[start:end]  # (batch,)
+#             signs_batch = self._signs[start:end]  # (batch, 2^n)
+
+#             # compute xi for all time steps and this Pauli batch
+#             # xi[t, p] = <psi_t|P_p|psi_t>
+#             xi_batch = np.array(
+#                 jax.vmap(lambda psi: self._xi_batch(psi, a_batch, signs_batch))(psi_n)
+#             )  # (nsteps, batch)
+
+#             sum_xi4 += np.sum(xi_batch**4, axis=1)  # (nsteps,)
+
+#             if verbose and start % (self.batch_size * 10) == 0:
+#                 print(f"  Pauli batch {start}/{self.n_paulis}")
+
+#         m2 = -np.log(sum_xi4) + self.n * np.log(2)
+#         return m2
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+#### MEMORY INEFFICIENT CODE || END
+
+
+# src/jax_utils.py  — memory-safe version for large n
+
+
+def _build_binary_reps(n: int):
+    """Same as before — lightweight, O(4^n) int8."""
+    n_paulis = 4**n
+    pauli_map = np.array([[0, 0], [1, 0], [1, 1], [0, 1]], dtype=np.int8)
     indices = np.arange(n_paulis, dtype=np.int32)
     a_vecs = np.zeros((n_paulis, n), dtype=np.int8)
     b_vecs = np.zeros((n_paulis, n), dtype=np.int8)
-
     tmp = indices.copy()
     for k in range(n - 1, -1, -1):
         digit = tmp % 4
         a_vecs[:, k] = pauli_map[digit, 0]
         b_vecs[:, k] = pauli_map[digit, 1]
         tmp = tmp // 4
-
     return a_vecs, b_vecs
 
 
-def _build_xor_table(n: int):
+def _build_pauli_indices_only(n: int):
     """
-    Precompute XOR table: for each basis index x (0..2^n-1) and each Pauli a,
-    we need x XOR a_int where a_int = sum_k a_k * 2^(n-1-k).
-    Returns a_int : (4^n,) int32 array — integer representation of X parts.
+    Returns ONLY:
+      a_int : (4^n,) int32  — integer X-part (for XOR)
+      b_vecs: (4^n, n) int8 — Z-part (to compute signs on the fly per batch)
+    Does NOT build the (4^n, 2^n) signs table.
     """
     a_vecs, b_vecs = _build_binary_reps(n)
-    n_paulis = 4**n
-    dim = 2**n
-
-    # integer representation of a (X part) — for XOR
     powers = (2 ** np.arange(n - 1, -1, -1)).astype(np.int32)
-    a_int = (a_vecs @ powers).astype(np.int32)  # (4^n,)
-
-    # integer dot product b.x for all x and all Paulis
-    # b_dot_x[p, x] = sum_k b_vecs[p,k] * bit_k(x)   mod 2
-    # We'll compute this as a (4^n, 2^n) binary matrix
-    x_vals = np.arange(dim, dtype=np.int32)  # (2^n,)
-    # bit_matrix[x, k] = k-th bit of x
-    bit_matrix = ((x_vals[:, None] >> np.arange(n - 1, -1, -1)[None, :]) & 1).astype(
-        np.int8
-    )
-    # b_dot_x[p, x] = (b_vecs[p] . bit_matrix[x]) mod 2
-    b_dot_x = (b_vecs @ bit_matrix.T) % 2  # (4^n, 2^n)
-    signs = 1 - 2 * b_dot_x  # (4^n, 2^n): +1 or -1
-
-    return a_int, signs
+    a_int = (a_vecs @ powers).astype(np.int32)
+    return a_int, b_vecs  # b_vecs is (4^n, n) int8 — fine for n=12: 16M×12 = 192 MB
 
 
 class SREJax:
     """
-    Stabilizer Rényi Entropy at n=2 using JAX.
+    Stabilizer Rényi Entropy M_2, memory-safe for large n.
 
-    M_2(psi) = -log(sum_P <psi|P|psi>^4) - n*log(2)
-
-    Algorithm:
-        For each Pauli P = X^a Z^b:
-            <psi|P|psi> = sum_x psi*(x) * (-1)^{x.b} * psi(x XOR a)
-                        = sum_x conj(psi[x]) * sign[x] * psi[x XOR a]
-
-    This vectorizes over all 4^n Paulis simultaneously using precomputed
-    XOR indices and sign tables — no matrix exponentiation, no dense Pauli
-    tensor, memory scales as O(4^n + 2^n) not O(4^n * 2^n * 2^n).
+    Signs are computed on-the-fly per batch instead of precomputed for all
+    (4^n, 2^n) pairs, reducing peak RAM from O(4^n * 2^n) to O(batch * 2^n).
 
     Parameters
     ----------
-    n_qubits : int
-    batch_size : int
-        Number of Paulis to process per JAX call. Tune to fit GPU/CPU memory.
-        Default 4096 works well for n=10 on CPU.
+    n_qubits   : int
+    batch_size : int  — Paulis per JAX call. 256–1024 works for n=12 on CPU.
     """
 
-    def __init__(self, n_qubits: int, batch_size: int = 4096):
+    def __init__(self, n_qubits: int, batch_size: int = 512):
         self.n = n_qubits
         self.dim = 2**n_qubits
         self.n_paulis = 4**n_qubits
         self.batch_size = batch_size
 
-        print(f"Building Pauli tables for n={n_qubits} ({self.n_paulis} Paulis)...")
-        a_int, signs = _build_xor_table(n_qubits)
+        print(
+            f"Building Pauli index tables for n={n_qubits} ({self.n_paulis:,} Paulis)..."
+        )
+        a_int, b_vecs = _build_pauli_indices_only(n_qubits)
 
-        # store as jax arrays
         self._a_int = jnp.array(a_int, dtype=jnp.int32)  # (4^n,)
-        self._signs = jnp.array(signs, dtype=jnp.float64)  # (4^n, 2^n)
-        self._x_idx = jnp.arange(self.dim, dtype=jnp.int32)  # (2^n,)
+        self._b_vecs = jnp.array(b_vecs, dtype=jnp.int8)  # (4^n, n) — 192 MB for n=12
+        self._x_idx = jnp.arange(self.dim, dtype=jnp.int32)
+
+        # precompute bit decomposition of x for sign computation
+        # bit_matrix[x, k] = k-th bit of x  — shape (2^n, n), tiny
+        x_vals = np.arange(self.dim, dtype=np.int32)
+        bit_matrix = (
+            (x_vals[:, None] >> np.arange(n_qubits - 1, -1, -1)[None, :]) & 1
+        ).astype(np.int8)
+        self._bit_matrix = jnp.array(bit_matrix, dtype=jnp.int8)  # (2^n, n)
         print("Done.")
 
-    # ─────────────────────────────────────────────────────────────────────────
     @partial(jax.jit, static_argnums=(0,))
-    def _xi_batch(
-        self, psi: jnp.ndarray, a_int_batch: jnp.ndarray, signs_batch: jnp.ndarray
-    ) -> jnp.ndarray:
+    def _xi_batch(self, psi, a_int_batch, b_vecs_batch):
         """
-        Compute <psi|P|psi> for a batch of Paulis.
-        psi          : (2^n,) complex
-        a_int_batch  : (batch,) int32
-        signs_batch  : (batch, 2^n) float64
-        Returns      : (batch,) float64
+        psi          : (2^n,) complex128
+        a_int_batch  : (B,)   int32
+        b_vecs_batch : (B, n) int8
+        Returns      : (B,)   float64
         """
-        # psi[x XOR a] for each Pauli in batch: shape (batch, 2^n)
+        # XOR: psi[x XOR a] for each Pauli
         x_xor_a = jnp.bitwise_xor(
             self._x_idx[None, :], a_int_batch[:, None]
-        )  # (batch, 2^n)
-        psi_flipped = psi[x_xor_a]  # (batch, 2^n) complex
+        )  # (B, 2^n)
+        psi_flipped = psi[x_xor_a]  # (B, 2^n)
 
-        # <psi|P|psi> = sum_x conj(psi[x]) * sign[x] * psi[x XOR a]
+        # signs: (-1)^{b . bits(x)} — computed on the fly
+        # b_dot_x[p, x] = (b_vecs_batch[p] @ bit_matrix[x]) mod 2
+        b_dot_x = (b_vecs_batch.astype(jnp.int32) @ self._bit_matrix.T) % 2  # (B, 2^n)
+        signs = 1 - 2 * b_dot_x  # (B, 2^n)
+
         xi = jnp.einsum(
-            "x,px,px->p",
-            psi.conj(),
-            signs_batch,
-            psi_flipped,
-        ).real  # (batch,) float64
-
+            "x,px,px->p", psi.conj(), signs.astype(jnp.float64), psi_flipped
+        ).real  # (B,)
         return xi
 
-    # ─────────────────────────────────────────────────────────────────────────
     def characteristic_function(self, psi: np.ndarray) -> np.ndarray:
-        """
-        Compute Xi(P) = <psi|P|psi> for all 4^n Paulis.
-        Returns numpy array of shape (4^n,).
-        """
-        psi = jnp.array(psi / np.linalg.norm(psi), dtype=jnp.complex128)
-        xi = np.zeros(self.n_paulis, dtype=np.float64)
-
+        psi = jnp.array(psi, dtype=jnp.complex128)
+        xi_all = np.empty(self.n_paulis, dtype=np.float64)
         for start in range(0, self.n_paulis, self.batch_size):
             end = min(start + self.batch_size, self.n_paulis)
-            xi[start:end] = np.array(
-                self._xi_batch(
-                    psi,
-                    self._a_int[start:end],
-                    self._signs[start:end],
-                )
+            xi_all[start:end] = np.array(
+                self._xi_batch(psi, self._a_int[start:end], self._b_vecs[start:end])
             )
+        return xi_all
 
-        return xi
-
-    # ─────────────────────────────────────────────────────────────────────────
-    def __call__(self, psi: np.ndarray) -> float:
-        """
-        M_2(psi) = -log(sum_P Xi(P)^4) - n*log(2)
-        """
+    def sre(self, psi: np.ndarray) -> float:
+        """M_2(psi) = -log2(sum_P Xi(P)^4) - n*log2(2)  [in nats if using log]"""
         xi = self.characteristic_function(psi)
-        return float(-np.log(np.sum(xi**4)) + self.n * np.log(2))
+        return float(-np.log(np.sum(xi**4)) + self.n * np.log(2.0))
 
-    # ─────────────────────────────────────────────────────────────────────────
-    def along_path(self, psi_history: np.ndarray, verbose: bool = True) -> np.ndarray:
-        """
-        Compute M_2 along a full annealing trajectory.
-
-        psi_history : (nsteps, 2^n) complex array
-        Returns     : (nsteps,) float64 array
-        """
-        nsteps = psi_history.shape[0]
-        m2 = np.zeros(nsteps)
-
-        for i in range(nsteps):
-            m2[i] = self(psi_history[i])
-            if verbose and i % 10 == 0:
-                print(f"  SRE step {i}/{nsteps}: M2={m2[i]:.4f}")
-
-        return m2
-
-    # ─────────────────────────────────────────────────────────────────────────
-    def along_path_fast(
-        self, psi_history: np.ndarray, verbose: bool = True
-    ) -> np.ndarray:
-        """
-        Faster version: processes all time steps together per Pauli batch.
-        Better cache usage when nsteps is large.
-
-        psi_history : (nsteps, 2^n) complex array
-        Returns     : (nsteps,) float64 array
-        """
-        nsteps = psi_history.shape[0]
-        norms = np.linalg.norm(psi_history, axis=1, keepdims=True)
-        psi_n = jnp.array(psi_history / norms, dtype=jnp.complex128)
-
-        # sum_P xi^4 accumulated over batches
-        sum_xi4 = np.zeros(nsteps, dtype=np.float64)
-
-        for start in range(0, self.n_paulis, self.batch_size):
-            end = min(start + self.batch_size, self.n_paulis)
-            a_batch = self._a_int[start:end]  # (batch,)
-            signs_batch = self._signs[start:end]  # (batch, 2^n)
-
-            # compute xi for all time steps and this Pauli batch
-            # xi[t, p] = <psi_t|P_p|psi_t>
-            xi_batch = np.array(
-                jax.vmap(lambda psi: self._xi_batch(psi, a_batch, signs_batch))(psi_n)
-            )  # (nsteps, batch)
-
-            sum_xi4 += np.sum(xi_batch**4, axis=1)  # (nsteps,)
-
-            if verbose and start % (self.batch_size * 10) == 0:
-                print(f"  Pauli batch {start}/{self.n_paulis}")
-
-        m2 = -np.log(sum_xi4) + self.n * np.log(2)
-        return m2
+    def __call__(self, psi: np.ndarray) -> float:
+        return self.sre(psi)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
 class JaxTrainer:
     """
     Handles optimization of a JaxSchedulerModel.

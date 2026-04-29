@@ -38,11 +38,17 @@ from src.jax_utils import SREJax
 # Hamiltonian builders
 # ─────────────────────────────────────────────────────────────────────────────
 def sample_instance(nqubits: int, seed: int) -> np.ndarray:
-    """Sample a random 3-regular graph with ±1 couplings."""
-    rng = np.random.default_rng(seed)
-    G = nx.random_regular_graph(d=3, n=nqubits, seed=seed)
+    """Sample a random 3-regular connected graph with ±1 couplings."""
+    current_seed = seed
+    while True:
+        G = nx.random_regular_graph(d=3, n=nqubits, seed=current_seed)
+        if nx.is_connected(G):
+            break
+        current_seed += 1  # try next seed until we get a connected graph
+
+    rng = np.random.default_rng(seed)  # keep original seed for weights
     for u, v in G.edges():
-        G[u][v]["weight"] = np.random.uniform(0.0, 1)
+        G[u][v]["weight"] = rng.uniform(0.0, 1.0)
     return nx.to_numpy_array(G, weight="weight")
 
 
@@ -239,7 +245,7 @@ def collect_instances(
 
         # ── fidelity ──────────────────────────────────────────────────────────
         # sum over degenerate GS pair (indices 0 and 1)
-        gs_subspace = evecs_t[:, :2]
+        gs_subspace = evecs_t[:, :1]
         fidelity = float(np.sum(np.abs(gs_subspace.conj().T @ psi_history[-1]) ** 2))
 
         elapsed = _time.time() - t0
