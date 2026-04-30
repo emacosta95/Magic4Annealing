@@ -78,6 +78,7 @@ def run_experiment(
     nlevels: int = 6,
     maxiter: int = 500,
     verbose: bool = False,
+    inner_steps_per_tau: int = 20,
 ) -> dict:
     """
     Run linear and optimal control protocols.
@@ -92,7 +93,7 @@ def run_experiment(
     PS = Sector(nqubits=nqubits)
     dim = 2**nqubits
     dim_s = dim // 2
-    time_steps = int(20 * tau)
+    time_steps = int(inner_steps_per_tau * tau)
     time = np.linspace(0, tau, time_steps)
     delta_t = time[1] - time[0]
 
@@ -366,6 +367,7 @@ def main():
     parser.add_argument("--study", choices=["tau", "params", "size"], required=True)
     parser.add_argument("--nqubits", type=int, default=6)
     parser.add_argument("--tau", type=float, default=10.0)
+    parser.add_argument("--time_steps", type=int, default=20)
     parser.add_argument("--n_params", type=int, default=5)
     parser.add_argument("--output", type=str, default="results/")
     parser.add_argument("--schedule_type", type=str, default="F-CRAB")
@@ -378,6 +380,7 @@ def main():
         schedule_type=args.schedule_type,
         maxiter=args.maxiter,
         verbose=True,
+        inner_steps_per_tau=args.time_steps,
     )
 
     if args.study == "tau":

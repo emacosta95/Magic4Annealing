@@ -26,7 +26,7 @@ import networkx as nx
 import numpy as np
 import scipy.sparse as sp
 from scipy.sparse.linalg import eigsh, expm_multiply
-from tqdm import trange
+from tqdm import trange, tqdm
 
 # ── project imports ───────────────────────────────────────────────────────────
 from src.annealing_utils import get_driver_hamiltonian, get_longitudinal_hamiltonian
@@ -138,40 +138,60 @@ def collect_instances(
     driver_hamiltonian_s = PS.project(driver_hamiltonian)
 
     # ── phase 1: rank all instances by gap ───────────────────────────────────
-    print(f"\n── Phase 1: sampling {n_instances} instances ──")
+    print(f"\n── Phase 1: sampling up to {n_instances} instances ──")
     gap_records = []
+    n_skipped_disconnected = 0
+    n_skipped_classical = 0
+    seed = 0
 
-    for seed in trange(n_instances, desc="Sampling gaps"):
-        jij = sample_instance(nqubits, seed)
-        target_hamiltonian = get_longitudinal_hamiltonian(jij)
-        target_hamiltonian_s = PS.project(target_hamiltonian)
+    with tqdm(total=n_instances, desc="Sampling gaps") as pbar:
+        while len(gap_records) < n_instances:
+            jij = sample_instance(nqubits, seed)
+            seed += 1
 
-        min_gap, t_min, spectrum = compute_minimum_gap(
-            driver_hamiltonian_s,
-            target_hamiltonian_s,
-            tau,
-            time_steps,
-            nlevels,
-        )
+            # ── filter 1: connected graph ─────────────────────────────────
+            G = nx.from_numpy_array(jij)
+            if not nx.is_connected(G):
+                n_skipped_disconnected += 1
+                continue
 
-        gap_records.append(
-            {
-                "seed": seed,
-                "jij": jij,
-                "min_gap": min_gap,
-                "t_min_gap": t_min,
-                "spectrum": spectrum,
-            }
-        )
+            target_hamiltonian = get_longitudinal_hamiltonian(jij)
+            target_hamiltonian_s = PS.project(target_hamiltonian)
+
+            min_gap, t_min, spectrum = compute_minimum_gap(
+                driver_hamiltonian_s,
+                target_hamiltonian_s,
+                tau,
+                time_steps,
+                nlevels,
+            )
+
+            # ── filter 2: genuine avoided crossing ───────────────────────
+            delta_target = float(spectrum[-1, 1] - spectrum[-1, 0])
+            if min_gap >= delta_target:
+                n_skipped_classical += 1
+                continue
+
+            gap_records.append(
+                {
+                    "seed": seed,
+                    "jij": jij,
+                    "min_gap": min_gap,
+                    "t_min_gap": t_min,
+                    "spectrum": spectrum,
+                    "delta_target": delta_target,
+                }
+            )
+            pbar.update(1)
+
+    print(f"  Total seeds tried:           {seed}")
+    print(f"  Skipped disconnected:        {n_skipped_disconnected}")
+    print(f"  Skipped classical-degenerate:{n_skipped_classical}")
+    print(f"  Valid instances collected:   {len(gap_records)}")
 
     # sort by gap ascending (hardest = smallest gap first)
     gap_records.sort(key=lambda x: x["min_gap"])
     hardest = gap_records[:n_keep]
-
-    print(
-        f"\nGap range of kept instances: "
-        f'{hardest[0]["min_gap"]:.4f} … {hardest[-1]["min_gap"]:.4f}'
-    )
 
     # ── phase 2: full magic + entanglement for hardest instances ──────────────
     print(f"\n── Phase 2: computing magic & entanglement for top {n_keep} ──")

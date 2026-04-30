@@ -54,10 +54,15 @@ class JaxSchedule:
         # ── parameter vector sizing ───────────────────────────────────────────
         if self.type in _FOURIER_TYPES:
             n_params = 4 * dim
+
+        elif self.type == "cumulative":
+            n_params = 2 * dim + 2
+
         else:  # power law
             n_params = 2 * dim
 
         self.parameters = np.zeros(n_params)
+
         if random:
             rng = np.random.default_rng(seed)
             self.parameters = rng.uniform(-2, 2, size=n_params)
@@ -68,8 +73,7 @@ class JaxSchedule:
                 # random perturbation around harmonics — avoids local traps
                 rng = np.random.default_rng(seed)
                 self.omegas = (
-                    2
-                    * np.pi
+                    np.pi
                     * np.arange(1, dim + 1)
                     * (1 + rng.uniform(-0.5, 0.5, dim))
                     / self.tf
@@ -77,7 +81,7 @@ class JaxSchedule:
             else:
                 # exact harmonics: 2π k / tf  for k = 1, ..., dim
                 # applies to 'fourier', 'positive fourier', 'squared fourier'
-                self.omegas = 2 * np.pi * np.arange(1, dim + 1) / self.tf
+                self.omegas = np.pi * np.arange(1, dim + 1) / self.tf
         # ── precompute jax constants (time, basis) ────────────────────────────
         self._time_jax = jnp.array(self.time)
 
@@ -86,7 +90,6 @@ class JaxSchedule:
             self._sin_basis = jnp.sin(
                 jnp.outer(_omegas, self._time_jax)
             )  # (dim, nsteps)
-            self._cos_basis = jnp.cos(jnp.outer(_omegas, self._time_jax))
         elif self.type == "power law":
             exponents = jnp.arange(1, dim + 1)[:, None]
             self._pw_basis = (
@@ -97,6 +100,15 @@ class JaxSchedule:
         # softplus(1) ~ 1.3133 — used to rescale so zero-params -> linear ramp
         if self.type in _POSITIVE_TYPES:
             self._sp_norm = float(jax.nn.softplus(jnp.ones(1))[0])
+
+        elif self.type == "cumulative":
+            u = self.time / tf  # numpy, ok here
+            knots = np.linspace(0, 1, dim + 1)
+            idx = np.searchsorted(knots, u, side="right") - 1
+            idx = np.clip(idx, 0, dim - 1)
+            alpha = np.clip((u - knots[idx]) * dim, 0.0, 1.0)
+            self._cum_idx = jnp.array(idx, dtype=jnp.int32)
+            self._cum_alpha = jnp.array(alpha, dtype=jnp.float64)
 
     # ─────────────────────────────────────────────────────────────────────────
     def get_driving(self) -> tuple:
@@ -110,21 +122,15 @@ class JaxSchedule:
         t = self._time_jax
         tf = self.tf
 
+        # in _get_driving_jax — drop b coefficients, halve parameter count
         if self.type in ("F-CRAB", "fourier"):
-            # ── standard Fourier / F-CRAB — can go negative ───────────────────
-            a_drv = parameters[:dim]
-            b_drv = parameters[dim : 2 * dim]
-            a_tgt = parameters[2 * dim : 3 * dim]
-            b_tgt = parameters[3 * dim : 4 * dim]
+            n_params = 2 * dim  # was 4*dim: now C^x(dim) + C^z(dim)
 
-            corr_driver = jnp.mean(
-                a_drv[:, None] * self._sin_basis + b_drv[:, None] * self._cos_basis,
-                axis=0,
-            )
-            corr_target = jnp.mean(
-                a_tgt[:, None] * self._sin_basis + b_tgt[:, None] * self._cos_basis,
-                axis=0,
-            )
+            a_drv = parameters[:dim]
+            a_tgt = parameters[dim : 2 * dim]
+
+            corr_driver = jnp.sum(a_drv[:, None] * self._sin_basis, axis=0)
+            corr_target = jnp.sum(a_tgt[:, None] * self._sin_basis, axis=0)
 
             h_driver = (1 - t / tf) * (1 + corr_driver)
             h_target = (t / tf) * (1 + corr_target)
@@ -172,6 +178,33 @@ class JaxSchedule:
             # (1 + raw)^2 → always positive, =1 at zero params
             h_driver = (1 - t / tf) * (1 + raw_driver) ** 2
             h_target = (t / tf) * (1 + raw_target) ** 2
+
+        elif self.type == "cumulative":
+
+            w_tgt = parameters[:dim]
+            w_drv = parameters[dim : 2 * dim]
+            A_tgt = jax.nn.softplus(parameters[2 * dim])  # strictly positive scale
+            A_drv = jax.nn.softplus(parameters[2 * dim + 1])
+
+            # ── target: monotone increasing, starts at 0 ──────────────────────────
+            p_tgt = jax.nn.softmax(w_tgt)  # (dim,) positive, sums to 1
+            knots_tgt = jnp.concatenate([jnp.zeros(1), jnp.cumsum(p_tgt)])  # (dim+1,)
+            h_left = knots_tgt[self._cum_idx]
+            h_right = knots_tgt[self._cum_idx + 1]
+            h_target = A_tgt * (h_left + self._cum_alpha * (h_right - h_left))
+            # h_target(0) = 0 exactly, h_target(1) = A_tgt (free)
+
+            # ── driver: monotone decreasing, ends at 0 ────────────────────────────
+            p_drv = jax.nn.softmax(w_drv)
+            p_drv_r = p_drv[::-1]  # reverse → decreasing cumsum
+            knots_drv = jnp.concatenate([jnp.zeros(1), jnp.cumsum(p_drv_r)])  # (dim+1,)
+            h_left = knots_drv[self._cum_idx]
+            h_right = knots_drv[self._cum_idx + 1]
+            cum = h_left + self._cum_alpha * (h_right - h_left)
+            h_driver = A_drv * (1.0 - cum)
+            # h_driver(1) = 0 exactly, h_driver(0) = A_drv (free)
+
+            # parameter count: dim  (not 2*dim)
 
         else:  # power law
             corr_driver = jnp.mean(parameters[:dim, None] * self._pw_basis, axis=0)
