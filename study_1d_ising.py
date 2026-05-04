@@ -79,6 +79,7 @@ def run_experiment(
     nlevels: int = 6,
     maxiter: int = 500,
     verbose: bool = False,
+    method: str = "sparse_grape",
     inner_steps_per_tau: int = 20,
 ) -> dict:
     """
@@ -183,27 +184,45 @@ def run_experiment(
     # Protocol 2: OPTIMAL CONTROL
     # ─────────────────────────────────────────────────────────────────────────
     print(f"  [{nqubits}q τ={tau} Np={n_params}] Optimal control...")
-    model = SparseGRAPEModel(
-        initial_state=psi_init_s,
-        target_hamiltonian=target_hamiltonian_s,
-        initial_hamiltonian=driver_hamiltonian_s,
-        reference_hamiltonian=target_hamiltonian_s,
-        tf=tau,
-        number_of_parameters=n_params,
-        nsteps=time_steps,
-        type=schedule_type,
-        seed=42,
-        mode="annealing ansatz",
-        random=False,
-    )
-    trainer = SparseGRAPETrainer(
-        model,
-        maxiter=maxiter,
-        tol=1e-3,
-        ftol=1e-5,
-        gtol=1e-4,
-        verbose=verbose,
-    )
+    if method == "sparse_grape":
+        model = SparseGRAPEModel(
+            initial_state=psi_init_s,
+            target_hamiltonian=target_hamiltonian_s,
+            initial_hamiltonian=driver_hamiltonian_s,
+            reference_hamiltonian=target_hamiltonian_s,
+            tf=tau,
+            number_of_parameters=n_params,
+            nsteps=time_steps,
+            type=schedule_type,
+            seed=42,
+            mode="annealing ansatz",
+            random=False,
+        )
+        trainer = SparseGRAPETrainer(
+            model,
+            maxiter=maxiter,
+            tol=1e-3,
+            ftol=1e-5,
+            gtol=1e-4,
+            verbose=verbose,
+        )
+    else:
+        model = JaxSchedulerModel(
+            initial_state=psi_init_s,
+            target_hamiltonian=target_hamiltonian_s,
+            initial_hamiltonian=driver_hamiltonian_s,
+            reference_hamiltonian=target_hamiltonian_s,
+            tf=tau,
+            number_of_parameters=n_params,
+            nsteps=time_steps,
+            type=schedule_type,
+            seed=42,
+            mode="annealing ansatz",
+            random=False,
+        )
+        trainer = JaxTrainer(
+            model, maxiter=maxiter, tol=1e-3, ftol=1e-5, gtol=1e-4, verbose=verbose
+        )
     opt_results = trainer.run()
     h_driver_opt = opt_results["h_driver"]
     h_target_opt = opt_results["h_target"]
@@ -373,6 +392,9 @@ def main():
     parser.add_argument("--output", type=str, default="results/")
     parser.add_argument("--schedule_type", type=str, default="F-CRAB")
     parser.add_argument("--maxiter", type=int, default=500)
+    parser.add_argument(
+        "--method", choices=["sparse_grape", "jax"], default="sparse_grape"
+    )
     args = parser.parse_args()
 
     Path(args.output).mkdir(parents=True, exist_ok=True)

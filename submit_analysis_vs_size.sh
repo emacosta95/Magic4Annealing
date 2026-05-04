@@ -4,7 +4,7 @@
 #SBATCH --error=logs/ising_vs_size_%j.err
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=32          # JAX + scipy eigsh use threading
-#SBATCH --time=18:00:00            # conservative for tau=10, maxiter=500
+#SBATCH --time=48:00:00            # conservative for tau=10, maxiter=500
 #SBATCH --account=bsc21
 #SBATCH --qos=gp_bsccase
 #SBATCH --partition=gpp
