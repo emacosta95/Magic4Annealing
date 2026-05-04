@@ -43,6 +43,7 @@ from src.annealing_utils import (
     get_longitudinal_hamiltonian,
 )
 from src.jax_utils import JaxSchedulerModel, JaxTrainer, SREJax
+from src.sparse_grape_method import SparseGRAPEModel, SparseGRAPETrainer
 from src.utils import Sector, EntanglementEntropy
 
 
@@ -182,7 +183,7 @@ def run_experiment(
     # Protocol 2: OPTIMAL CONTROL
     # ─────────────────────────────────────────────────────────────────────────
     print(f"  [{nqubits}q τ={tau} Np={n_params}] Optimal control...")
-    model = JaxSchedulerModel(
+    model = SparseGRAPEModel(
         initial_state=psi_init_s,
         target_hamiltonian=target_hamiltonian_s,
         initial_hamiltonian=driver_hamiltonian_s,
@@ -195,7 +196,7 @@ def run_experiment(
         mode="annealing ansatz",
         random=False,
     )
-    trainer = JaxTrainer(
+    trainer = SparseGRAPETrainer(
         model,
         maxiter=maxiter,
         tol=1e-3,

@@ -144,16 +144,14 @@ class JaxSchedule:
             #   - parameters = 0  ->  h = ramp  (linear annealing recovered)
             #   - smooth, differentiable everywhere
             a_drv = parameters[:dim]
-            b_drv = parameters[dim : 2 * dim]
-            a_tgt = parameters[2 * dim : 3 * dim]
-            b_tgt = parameters[3 * dim : 4 * dim]
+            a_tgt = parameters[dim : 2 * dim]
 
             raw_driver = jnp.mean(
-                a_drv[:, None] * self._sin_basis + b_drv[:, None] * self._cos_basis,
+                a_drv[:, None] * self._sin_basis,
                 axis=0,
             )
             raw_target = jnp.mean(
-                a_tgt[:, None] * self._sin_basis + b_tgt[:, None] * self._cos_basis,
+                a_tgt[:, None] * self._sin_basis,
                 axis=0,
             )
 
@@ -312,6 +310,7 @@ class JaxSchedulerModel(JaxSchedule):
         def forward(parameters):
             h_driver, h_target = get_driving(parameters)
 
+            # we shouldn't use this
             def step(psi, i):
                 H_t = h_driver[i] * H_driver + h_target[i] * H_target
                 psi = expm(-1j * dt * H_t) @ psi
@@ -344,6 +343,7 @@ class JaxSchedulerModel(JaxSchedule):
         H_driver, H_target = self._H_driver, self._H_target
         dt = self._dt
 
+        # we shoundn't use this since it's a dense matrix multiplication
         def step(psi, i):
             H_t = h_driver[i] * H_driver + h_target[i] * H_target
             psi = expm(-1j * dt * H_t) @ psi
