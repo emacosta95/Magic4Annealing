@@ -29,6 +29,8 @@ class JaxSchedule:
     'F-CRAB'           : same as fourier with randomised frequencies
     'positive fourier' : Fourier + softplus — guaranteed positive schedules
     'power law'        : polynomial correction
+    'LZS'              : M-plateau Landau-Zener-Stückelberg interference ansatz
+                         (direct s(t) parametrization, mirrors schedule_utils.py)
     """
 
     def __init__(
@@ -57,6 +59,13 @@ class JaxSchedule:
 
         elif self.type == "cumulative":
             n_params = 2 * dim + 2
+
+        elif self.type == "LZS":
+            # dim = M plateaus/interferometer arms.
+            # (2M+1) segment durations + M plateau heights — mirrors
+            # schedule_utils.Schedule exactly. Boundary conditions s(0)=0,
+            # s(tf)=1 are built in, so 'mode' has no effect for this type.
+            n_params = 3 * dim + 1
 
         else:  # power law
             n_params = 2 * dim
@@ -109,6 +118,13 @@ class JaxSchedule:
             alpha = np.clip((u - knots[idx]) * dim, 0.0, 1.0)
             self._cum_idx = jnp.array(idx, dtype=jnp.int32)
             self._cum_alpha = jnp.array(alpha, dtype=jnp.float64)
+
+        elif self.type == "LZS":
+            # M = dim, n_seg = 2M+1. Nothing to precompute besides constants
+            # needed inside _get_driving_jax (kept there for clarity/symmetry
+            # with the scipy version).
+            self._lzs_M = dim
+            self._lzs_n_seg = 2 * dim + 1
 
     # ─────────────────────────────────────────────────────────────────────────
     def get_driving(self) -> tuple:
@@ -204,6 +220,51 @@ class JaxSchedule:
 
             # parameter count: dim  (not 2*dim)
 
+        elif self.type == "LZS":
+            # ── Landau-Zener-Stückelberg interference ansatz ────────────────
+            # Mirrors schedule_utils.Schedule 'LZS' branch exactly:
+            #   - (2M+1) segment durations (softplus -> positive, normalised
+            #     to sum to tf)
+            #   - M plateau heights s_1...s_M (sigmoid -> (0,1))
+            # Piecewise-linear/constant s(t) is built via jnp.where instead
+            # of boolean-mask assignment, since JAX requires static shapes
+            # under jit — differentiable w.r.t. parameters throughout.
+            M = dim
+            n_seg = self._lzs_n_seg
+            raw_durations = parameters[:n_seg]
+            raw_splateaus = parameters[n_seg : n_seg + M]
+
+            durations = jax.nn.softplus(raw_durations)
+            durations = durations / jnp.sum(durations) * tf
+            t_bounds = jnp.concatenate([jnp.zeros(1), jnp.cumsum(durations)])
+            t_bounds = t_bounds.at[-1].set(tf)  # guard against fp drift
+
+            s_plateaus = jax.nn.sigmoid(raw_splateaus)
+            s_way = jnp.concatenate(
+                [jnp.zeros(1), s_plateaus, jnp.ones(1)]
+            )  # length M+2
+
+            s = jnp.zeros_like(t)
+            for seg in range(n_seg):
+                t0 = t_bounds[seg]
+                t1 = t_bounds[seg + 1]
+                mask = (t >= t0) & (t <= t1)
+                if seg % 2 == 0:
+                    # ramp segment: linear interpolation between waypoints
+                    k = seg // 2
+                    s_start, s_end = s_way[k], s_way[k + 1]
+                    denom = jnp.where(t1 > t0, t1 - t0, 1.0)
+                    frac = (t - t0) / denom
+                    seg_val = s_start + (s_end - s_start) * frac
+                else:
+                    # plateau segment: constant value
+                    k = (seg + 1) // 2
+                    seg_val = jnp.full_like(t, s_way[k])
+                s = jnp.where(mask, seg_val, s)
+
+            h_driver = 1.0 - s
+            h_target = s
+
         else:  # power law
             corr_driver = jnp.mean(parameters[:dim, None] * self._pw_basis, axis=0)
             corr_target = jnp.mean(
@@ -214,6 +275,31 @@ class JaxSchedule:
             h_target = (t / tf) * (1 + corr_target)
 
         return h_driver, h_target
+
+    # ─────────────────────────────────────────────────────────────────────────
+    def get_lzs_waypoints(self):
+        """
+        Diagnostic helper (LZS type only): returns (t_bounds, s_way) — the
+        segment boundary times and s-values actually used by get_driving(),
+        decoded from the current self.parameters. Mirrors
+        schedule_utils.Schedule.get_lzs_waypoints(); returned as numpy arrays.
+        """
+        if self.type != "LZS":
+            raise ValueError("get_lzs_waypoints() only valid for type='LZS'")
+        dim = self.number_parameters
+        M = dim
+        n_seg = self._lzs_n_seg
+        raw_durations = self.parameters[:n_seg]
+        raw_splateaus = self.parameters[n_seg : n_seg + M]
+
+        durations = np.log1p(np.exp(raw_durations))
+        durations = durations / durations.sum() * self.tf
+        t_bounds = np.concatenate(([0.0], np.cumsum(durations)))
+        t_bounds[-1] = self.tf
+
+        s_plateaus = 1.0 / (1.0 + np.exp(-raw_splateaus))
+        s_way = np.concatenate(([0.0], s_plateaus, [1.0]))
+        return t_bounds, s_way
 
     # ─────────────────────────────────────────────────────────────────────────
     def load(self, parameters: np.ndarray):
@@ -235,7 +321,7 @@ class JaxSchedulerModel(JaxSchedule):
     - All public outputs (psi, energy, history, get_driving) are numpy arrays
       so the rest of your pipeline works without changes
 
-    Supported types: 'fourier', 'F-CRAB', 'positive fourier', 'power law'
+    Supported types: 'fourier', 'F-CRAB', 'positive fourier', 'power law', 'LZS'
     """
 
     def __init__(
@@ -365,6 +451,78 @@ class JaxSchedulerModel(JaxSchedule):
         self.history_psi.append(self.psi.copy())
         self.history_run.append(self.run_number)
         print(self.energy)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+class JaxTrainer:
+    """
+    Handles optimization of a JaxSchedulerModel.
+    Call trainer.run() and get results back as plain numpy/python objects.
+    """
+
+    def __init__(
+        self,
+        model: JaxSchedulerModel,
+        maxiter: int = 1000,
+        tol: float = 1e-6,
+        ftol: float = 1e-9,
+        gtol: float = 1e-6,
+        verbose: bool = True,
+    ):
+        self.model = model
+        self.maxiter = maxiter
+        self.tol = tol
+        self.ftol = ftol
+        self.gtol = gtol
+        self.verbose = verbose
+        self.result = None
+
+    # ─────────────────────────────────────────────────────────────────────────
+    def run(self) -> dict:
+        """
+        Run L-BFGS-B with exact gradients.
+        Returns a dict with all results as numpy arrays — no jax objects.
+        """
+        res = minimize(
+            self.model.forward,
+            self.model.parameters,
+            jac=self.model.gradient,
+            method="L-BFGS-B",
+            tol=self.tol,
+            callback=self.model.callback if self.verbose else None,
+            options={
+                "maxiter": self.maxiter,
+                "ftol": self.ftol,
+                "gtol": self.gtol,
+            },
+        )
+        self.result = res
+
+        # final forward pass to sync model state
+        self.model.forward(res.x)
+        h_driver, h_target = self.model.get_driving()
+
+        if self.verbose:
+            print(f"\nOptimization success : {res.success}")
+            print(f"Final energy         : {res.fun:.6f}")
+            print(f"Message              : {res.message}")
+
+        return {
+            "success": bool(res.success),
+            "message": res.message,
+            "n_iterations": int(res.nit),
+            "n_evals": int(res.nfev),
+            "energy": float(res.fun),
+            "parameters": np.array(res.x),
+            "psi": self.model.psi.copy(),
+            "h_driver": h_driver,
+            "h_target": h_target,
+            "time": self.model.time.copy(),
+            "history_energy": list(self.model.history),
+            "history_parameters": [p.copy() for p in self.model.history_parameters],
+            "history_drivings": self.model.history_drivings,
+            "history_psi": [p.copy() for p in self.model.history_psi],
+        }
 
 
 # ─────────────────────────────────────────────────────────────────────────────

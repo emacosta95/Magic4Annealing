@@ -12,12 +12,17 @@ Supports all schedule types from JaxSchedule:
     'positive fourier'  : softplus-wrapped sin+cos             — 4*dim params
     'squared fourier'   : squared sin+cos correction           — 4*dim params
     'power law'         : polynomial correction                — 2*dim params
+    'LZS'               : M-plateau interferometer ansatz      — 3*dim+1 params
 
 Schedule structure (same as JaxSchedule):
     h_driver(t_i) = ramp_drv(t_i) * (1 + correction_drv(t_i))
     h_target(t_i) = ramp_tgt(t_i) * (1 + correction_tgt(t_i))
 
     where ramp_drv = (1 - t/tf),  ramp_tgt = t/tf
+
+    Exception: 'LZS' parameterizes s(t) directly (piecewise linear ramps +
+    plateaus), with h_driver = 1 - s(t), h_target = s(t) — no ramp envelope,
+    mirrors schedule_utils.Schedule and JaxSchedule exactly.
 
 GRAPE formula:
     dE/dh_drv_i = -2 dt Im[ <χ_i | H_driver | ψ_i> ]
@@ -113,11 +118,18 @@ class SparseGRAPEModel:
         elif type == "power law":
             # [c_drv(dim), c_tgt(dim)]
             n_params = 2 * dim
+        elif type == "LZS":
+            # dim = M plateaus/interferometer arms.
+            # (2M+1) segment durations + M plateau heights — mirrors
+            # schedule_utils.Schedule / JaxSchedule exactly. Boundary
+            # conditions s(0)=0, s(tf)=1 are built in, so 'mode' has no
+            # effect for this type.
+            n_params = 3 * dim + 1
         else:
             raise ValueError(
                 f"Unknown schedule type '{type}'. "
                 f"Choose from: fourier, F-CRAB, positive fourier, "
-                f"squared fourier, power law."
+                f"squared fourier, power law, LZS."
             )
 
         self.parameters = np.zeros(n_params)
@@ -149,6 +161,12 @@ class SparseGRAPEModel:
             exponents = np.arange(1, dim + 1)[:, None]
             # pw_basis[k, i] = (t_i / tf)^(k+1)   shape: (dim, nsteps)
             self._pw_basis = (t[None, :] / tf) ** exponents
+
+        elif type == "LZS":
+            # Direct s(t) parametrization — nothing to precompute besides
+            # the segment count (kept for clarity/symmetry with JaxSchedule).
+            self._lzs_M = dim
+            self._lzs_n_seg = 2 * dim + 1
 
         # ── sparse Hamiltonians (kept sparse throughout) ───────────────────────
         self._H_driver = initial_hamiltonian.astype(complex)
@@ -268,6 +286,81 @@ class SparseGRAPEModel:
             dh_drv[:dim, :] = self._pw_basis * ramp_drv[None, :]
             dh_tgt[dim : 2 * dim, :] = self._pw_basis * ramp_tgt[None, :]
 
+        # ── LZS: M-plateau Landau-Zener-Stückelberg interference ansatz ──────
+        elif self.type == "LZS":
+            # Direct s(t) parametrization: h_driver=1-s, h_target=s, so BOTH
+            # depend on the FULL parameter vector — unlike the branches
+            # above, where driver/target params are disjoint. Durations are
+            # jointly softplus-normalized to sum to tf, so a change in any
+            # single raw_duration_m shifts EVERY segment boundary, not just
+            # its own segment — this couples all n_seg duration params
+            # together in the Jacobian (see dTb below).
+            M = dim
+            n_seg = self._lzs_n_seg
+            raw_durations = parameters[:n_seg]
+            raw_splateaus = parameters[n_seg : n_seg + M]
+
+            D = _softplus(raw_durations)
+            sig_D = _sigmoid(raw_durations)  # dD/d(raw_durations)
+            Ssum = D.sum()
+            scaled_durations = D / Ssum * tf
+            t_bounds = np.concatenate(([0.0], np.cumsum(scaled_durations)))
+            t_bounds[-1] = tf  # guard against fp drift
+
+            # dTb[k, m] = d(t_bounds[k]) / d(raw_durations[m])
+            c = sig_D / Ssum
+            ind = (np.arange(n_seg)[None, :] < np.arange(n_seg + 1)[:, None]).astype(
+                np.float64
+            )
+            dTb = c[None, :] * (tf * ind - t_bounds[:, None])  # (n_seg+1, n_seg)
+
+            sig_S = _sigmoid(raw_splateaus)
+            dsig_S = sig_S * (1.0 - sig_S)
+            s_way = np.concatenate(([0.0], sig_S, [1.0]))  # (M+2,)
+
+            s = np.zeros_like(t)
+            ds_dtheta = np.zeros((n_params, self.nsteps))
+
+            for seg in range(n_seg):
+                t0, t1 = t_bounds[seg], t_bounds[seg + 1]
+                dt0, dt1 = dTb[seg, :], dTb[seg + 1, :]  # (n_seg,) each
+                mask = (t >= t0) & (t <= t1)
+                tm = t[mask]
+                denom = (t1 - t0) if t1 > t0 else 1.0
+
+                if seg % 2 == 0:
+                    # ramp segment: linear interpolation between waypoints
+                    k = seg // 2
+                    s0, s1_ = s_way[k], s_way[k + 1]
+                    frac = (tm - t0) / denom
+                    s[mask] = s0 + (s1_ - s0) * frac
+
+                    # duration sensitivity — couples to ALL n_seg durations
+                    # via the normalization (see dTb derivation)
+                    dfrac = (
+                        dt0[:, None] * (tm[None, :] - t1)
+                        - dt1[:, None] * (tm[None, :] - t0)
+                    ) / denom**2  # (n_seg, n_masked)
+                    ds_dtheta[:n_seg, mask] += (s1_ - s0) * dfrac
+
+                    # plateau-height sensitivity — only the two flanking
+                    # waypoints of this ramp segment contribute
+                    if k - 1 >= 0:
+                        ds_dtheta[n_seg + (k - 1), mask] += (1 - frac) * dsig_S[k - 1]
+                    if k <= M - 1:
+                        ds_dtheta[n_seg + k, mask] += frac * dsig_S[k]
+                else:
+                    # plateau segment: constant value, no duration-dependence
+                    k = (seg + 1) // 2
+                    s[mask] = s_way[k]
+                    if k - 1 >= 0:
+                        ds_dtheta[n_seg + (k - 1), mask] += dsig_S[k - 1]
+
+            h_driver = 1.0 - s
+            h_target = s
+            dh_drv = -ds_dtheta
+            dh_tgt = ds_dtheta
+
         return h_driver, h_target, dh_drv, dh_tgt
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -277,6 +370,31 @@ class SparseGRAPEModel:
             parameters = self.parameters
         h_drv, h_tgt, _, _ = self._compute_driving_and_jacobian(parameters)
         return h_drv, h_tgt
+
+    # ─────────────────────────────────────────────────────────────────────────
+    def get_lzs_waypoints(self):
+        """
+        Diagnostic helper (LZS type only): returns (t_bounds, s_way) — the
+        segment boundary times and s-values actually used by get_driving(),
+        decoded from the current self.parameters. Mirrors
+        schedule_utils.Schedule.get_lzs_waypoints() / JaxSchedule's version.
+        """
+        if self.type != "LZS":
+            raise ValueError("get_lzs_waypoints() only valid for type='LZS'")
+        dim = self.number_parameters
+        M = dim
+        n_seg = self._lzs_n_seg
+        raw_durations = self.parameters[:n_seg]
+        raw_splateaus = self.parameters[n_seg : n_seg + M]
+
+        durations = np.log1p(np.exp(raw_durations))
+        durations = durations / durations.sum() * self.tf
+        t_bounds = np.concatenate(([0.0], np.cumsum(durations)))
+        t_bounds[-1] = self.tf
+
+        s_plateaus = 1.0 / (1.0 + np.exp(-raw_splateaus))
+        s_way = np.concatenate(([0.0], s_plateaus, [1.0]))
+        return t_bounds, s_way
 
     # ─────────────────────────────────────────────────────────────────────────
     def _forward_and_grad(self, parameters: np.ndarray, compute_grad: bool = True):
