@@ -1,4 +1,4 @@
-# src/sparse_grape.py
+# src/sparse_grape_method.py
 """
 Sparse GRAPE implementation — drop-in replacement for JaxSchedulerModel/JaxTrainer.
 
@@ -34,7 +34,7 @@ GRAPE formula:
     where |χ_i> is the co-state propagated backward from |χ_T> = H_ref |ψ_T>.
 
 Usage in study_1d_ising.py:
-    from src.sparse_grape import SparseGRAPEModel, SparseGRAPETrainer
+    from src.sparse_grape_method import SparseGRAPEModel, SparseGRAPETrainer
 
     model = SparseGRAPEModel(
         initial_state=psi_init_s,
@@ -54,6 +54,40 @@ Usage in study_1d_ising.py:
     # success, message, n_iterations, n_evals, energy,
     # parameters, psi, h_driver, h_target, time,
     # history_energy, history_parameters, history_drivings, history_psi
+
+-------------------------------------------------------------------------------
+COLLABORATOR QUICK-START — reading order for this file
+-------------------------------------------------------------------------------
+1. The physics setup: at every timestep t_i we build a time-dependent
+   Hamiltonian H(t_i) = h_driver(t_i) * H_driver + h_target(t_i) * H_target
+   and propagate the wavefunction psi one small step forward with a matrix
+   exponential. h_driver/h_target are two curves ("schedules") between 0
+   and 1 that control the annealing protocol; everything in this file is
+   about (a) how those curves are generated from a small set of free
+   parameters theta ("schedule ansatz"), and (b) how to differentiate the
+   final energy w.r.t. theta so an optimizer (L-BFGS-B) can improve it.
+2. SparseGRAPEModel.__init__            — allocates parameters per ansatz type.
+3. SparseGRAPEModel._compute_driving_and_jacobian
+                                         — theta -> (h_driver, h_target) and
+                                           their exact derivatives w.r.t. theta.
+                                           This is the only place that needs
+                                           touching if you add a new ansatz.
+4. SparseGRAPEModel._forward_and_grad   — propagates psi forward, computes
+                                           energy, propagates a "co-state"
+                                           backward, and combines everything
+                                           into the GRAPE gradient (the
+                                           analytic quantum-control analogue
+                                           of backprop).
+5. SparseGRAPETrainer.run               — wraps the above in scipy's
+                                           L-BFGS-B, with a finite-difference
+                                           sanity check on the gradient at
+                                           the starting point.
+
+If you only need to *use* this module (not modify the ansatz), you can
+mostly ignore _compute_driving_and_jacobian's internals and just treat
+SparseGRAPEModel/SparseGRAPETrainer like a black box with the same
+interface as JaxSchedulerModel/JaxTrainer (see "Usage" above).
+-------------------------------------------------------------------------------
 """
 
 import numpy as np
@@ -65,12 +99,27 @@ from typing import Optional
 
 # ── softplus and its derivative ───────────────────────────────────────────────
 def _softplus(x: np.ndarray) -> np.ndarray:
-    """log(1 + exp(x)), numerically stable."""
+    """
+    log(1 + exp(x)), numerically stable.
+
+    Used to map an unconstrained real parameter onto a strictly-positive
+    number (e.g. a segment duration, which must be > 0). Computed as
+    log1p(exp(-|x|)) + max(x, 0) instead of the naive log(1+exp(x)) to
+    avoid overflow for large x.
+    """
     return np.log1p(np.exp(-np.abs(x))) + np.maximum(x, 0)
 
 
 def _sigmoid(x: np.ndarray) -> np.ndarray:
-    """Derivative of softplus = sigmoid(x) = 1 / (1 + exp(-x))."""
+    """
+    Derivative of softplus = sigmoid(x) = 1 / (1 + exp(-x)).
+
+    Two independent uses in this file:
+      1. As d(softplus)/dx, needed by the chain rule wherever a
+         softplus-mapped parameter (e.g. a raw duration) is differentiated.
+      2. As a standalone squashing function 0->1, used to map the raw
+         LZS plateau-height parameters into the physical range s in [0, 1].
+    """
     return 1.0 / (1.0 + np.exp(-x))
 
 
@@ -82,6 +131,10 @@ class SparseGRAPEModel:
     """
     Sparse GRAPE optimal control model.
     Drop-in replacement for JaxSchedulerModel — identical public interface.
+
+    Holds the (sparse) Hamiltonians, the current parameter vector theta,
+    and the optimization-history bookkeeping. Does not itself run an
+    optimizer — see SparseGRAPETrainer for that.
     """
 
     def __init__(
@@ -98,6 +151,42 @@ class SparseGRAPEModel:
         mode: Optional[str] = "annealing ansatz",
         random: bool = False,
     ):
+        """
+        Parameters
+        ----------
+        initial_state : (dim,) complex ndarray
+            psi(t=0), typically the driver Hamiltonian's ground state.
+        target_hamiltonian, initial_hamiltonian : sparse (dim, dim)
+            H_target (problem Hamiltonian, coefficient h_target(t)) and
+            H_driver (mixer/driver Hamiltonian, coefficient h_driver(t)).
+            H(t) = h_driver(t) * initial_hamiltonian + h_target(t) * target_hamiltonian.
+        reference_hamiltonian : sparse (dim, dim)
+            Hamiltonian used to evaluate the cost/energy at t=tf, i.e.
+            E = <psi(tf)| reference_hamiltonian |psi(tf)>. Usually equal to
+            target_hamiltonian (minimize the problem energy), but kept
+            separate in case a different observable is optimized against.
+        tf : float
+            Total annealing time.
+        number_of_parameters : int
+            The "dim" knob for the chosen ansatz — its meaning depends on
+            `type` (see the per-type sizing block below); for 'LZS' this is
+            M, the number of plateaus, NOT the total parameter count.
+        nsteps : int
+            Number of points in the time discretization (uniform grid).
+        type : str
+            Which schedule ansatz to use — see module docstring for the
+            full list and each one's parameter count.
+        seed : int
+            RNG seed, used for F-CRAB's randomised frequencies and/or
+            random parameter initialization.
+        mode : str, optional
+            Present for interface parity with JaxSchedulerModel; has no
+            effect for 'LZS' (boundary conditions s(0)=0, s(tf)=1 are
+            hard-coded there regardless).
+        random : bool
+            If True, initialize parameters ~ Uniform(-0.5, 0.5) instead of
+            all-zeros.
+        """
         self.tf = tf
         self.nsteps = nsteps
         self.type = type
@@ -109,6 +198,10 @@ class SparseGRAPEModel:
         t = self.time
 
         # ── parameter sizing ──────────────────────────────────────────────────
+        # Each ansatz type packs its free parameters into a single flat
+        # vector `self.parameters`. The slicing convention used here (which
+        # chunk of the vector belongs to which physical quantity) is repeated
+        # in _compute_driving_and_jacobian and must stay in sync with it.
         if type in ("fourier", "F-CRAB"):
             # sin only: [a_drv(dim), a_tgt(dim)]
             n_params = 2 * dim
@@ -138,8 +231,15 @@ class SparseGRAPEModel:
             self.parameters = rng.uniform(-0.5, 0.5, size=n_params)
 
         # ── basis functions ───────────────────────────────────────────────────
+        # Precompute the (fixed, parameter-independent) time-series basis
+        # functions once here so _compute_driving_and_jacobian only needs to
+        # do a cheap matrix-vector product per optimizer call.
         if type in ("fourier", "F-CRAB", "positive fourier", "squared fourier"):
             if type == "F-CRAB":
+                # F-CRAB ("Free" CRAB): frequencies are randomised around
+                # the harmonic grid pi*k/tf to break the periodicity that
+                # would otherwise let the optimizer get trapped by the
+                # basis's built-in symmetries.
                 rng = np.random.default_rng(seed)
                 self.omegas = (
                     np.pi
@@ -165,16 +265,24 @@ class SparseGRAPEModel:
         elif type == "LZS":
             # Direct s(t) parametrization — nothing to precompute besides
             # the segment count (kept for clarity/symmetry with JaxSchedule).
+            # M plateaus split the schedule into 2M+1 alternating segments:
+            # ramp, plateau, ramp, plateau, ..., ramp (M+1 ramps, M plateaus).
             self._lzs_M = dim
             self._lzs_n_seg = 2 * dim + 1
 
         # ── sparse Hamiltonians (kept sparse throughout) ───────────────────────
+        # Cast to complex up front so every downstream matrix-vector product
+        # (expm_multiply, inner products) is complex without repeated casts.
         self._H_driver = initial_hamiltonian.astype(complex)
         self._H_target = target_hamiltonian.astype(complex)
         self._H_ref = reference_hamiltonian.astype(complex)
         self._psi_init = initial_state.astype(complex)
 
         # ── state tracking (mirrors JaxSchedulerModel) ────────────────────────
+        # `energy`/`psi` reflect the most recent forward() or
+        # forward_and_gradient() call; the history_* lists are appended to
+        # only inside callback() (i.e. once per accepted optimizer iteration,
+        # not per internal line-search evaluation).
         self.energy = 1000.0
         self.psi = None
         self.history = []
@@ -188,6 +296,21 @@ class SparseGRAPEModel:
     def _compute_driving_and_jacobian(self, parameters: np.ndarray):
         """
         Compute schedules and their Jacobians w.r.t. parameters.
+
+        This is the core "ansatz" function: it maps the flat parameter
+        vector theta onto the two schedule curves h_driver(t), h_target(t)
+        actually fed into the Hamiltonian, AND the analytic derivative of
+        every timestep's h value w.r.t. every parameter. That Jacobian is
+        what lets _forward_and_grad turn a per-timestep gradient (from
+        GRAPE) into a per-parameter gradient via the chain rule, without
+        any numerical differentiation or autodiff.
+
+        Parameters
+        ----------
+        parameters : (n_params,) ndarray
+            theta, the current parameter vector (one branch is taken below
+            depending on self.type; each branch knows its own slicing of
+            this vector — see the sizing comment in __init__).
 
         Returns
         -------
@@ -208,6 +331,10 @@ class SparseGRAPEModel:
         dh_tgt = np.zeros((n_params, self.nsteps))
 
         # ── fourier / F-CRAB: sin only ────────────────────────────────────────
+        # h(t) = ramp(t) * (1 + sum_k a_k sin(ω_k t)) — a linear ramp from the
+        # pure-driver to the pure-target Hamiltonian, modulated by a sine
+        # series correction. Because the correction enters linearly, the
+        # Jacobian is just the (ramp-weighted) basis functions themselves.
         if self.type in ("fourier", "F-CRAB"):
             a_drv = parameters[:dim]
             a_tgt = parameters[dim : 2 * dim]
@@ -224,6 +351,10 @@ class SparseGRAPEModel:
             dh_tgt[dim : 2 * dim, :] = self._sin_basis * ramp_tgt[None, :]
 
         # ── positive fourier: softplus(1 + sin+cos correction) ───────────────
+        # Same idea as above but the correction is passed through softplus
+        # (divided by softplus(1) so the ramp envelope is preserved at
+        # theta=0) to GUARANTEE h_driver/h_target stay >= 0 — useful when the
+        # optimizer must not be allowed to flip the sign of a coupling.
         elif self.type == "positive fourier":
             a_drv = parameters[:dim]
             b_drv = parameters[dim : 2 * dim]
@@ -250,6 +381,9 @@ class SparseGRAPEModel:
             ] * self._cos_basis
 
         # ── squared fourier: (1 + sin+cos correction)^2 ──────────────────────
+        # Alternative positivity-enforcing nonlinearity: squaring instead of
+        # softplus. Cheaper to differentiate (polynomial chain rule) but,
+        # unlike softplus, allows h to touch exactly 0 (at raw = -1).
         elif self.type == "squared fourier":
             a_drv = parameters[:dim]
             b_drv = parameters[dim : 2 * dim]
@@ -272,6 +406,9 @@ class SparseGRAPEModel:
             dh_tgt[3 * dim : 4 * dim, :] = factor_tgt[None, :] * self._cos_basis
 
         # ── power law ─────────────────────────────────────────────────────────
+        # Correction built from a polynomial basis (t/tf)^(k+1), k=1..dim,
+        # rather than a Fourier series — a smoother, low-frequency-biased
+        # alternative ansatz.
         elif self.type == "power law":
             c_drv = parameters[:dim]
             c_tgt = parameters[dim : 2 * dim]
@@ -287,6 +424,22 @@ class SparseGRAPEModel:
             dh_tgt[dim : 2 * dim, :] = self._pw_basis * ramp_tgt[None, :]
 
         # ── LZS: M-plateau Landau-Zener-Stückelberg interference ansatz ──────
+        # Unlike every branch above, this one does NOT use a ramp envelope
+        # times a correction — it parameterizes the annealing fraction s(t)
+        # directly (h_driver = 1-s, h_target = s), as a piecewise-linear
+        # curve: ramp up to a plateau, hold, ramp again, hold, ..., ramp to
+        # s=1. The idea is to let the optimizer choose to linger (plateau)
+        # near a hard avoided crossing so that Landau-Zener-Stückelberg
+        # interference between the two crossing diabatic states can build up
+        # constructively, instead of sweeping through at constant speed.
+        #
+        # Free parameters (all unconstrained reals, squashed below):
+        #   raw_durations  (n_seg = 2M+1 of them) -> segment durations > 0,
+        #                  via softplus, then renormalized to sum to tf.
+        #   raw_splateaus  (M of them)            -> plateau heights in
+        #                  (0,1), via sigmoid. These are s_way[1..M]; the
+        #                  two endpoints s_way[0]=0 and s_way[M+1]=1 are
+        #                  fixed boundary conditions, not free parameters.
         elif self.type == "LZS":
             # Direct s(t) parametrization: h_driver=1-s, h_target=s, so BOTH
             # depend on the FULL parameter vector — unlike the branches
@@ -300,6 +453,10 @@ class SparseGRAPEModel:
             raw_durations = parameters[:n_seg]
             raw_splateaus = parameters[n_seg : n_seg + M]
 
+            # Step 1 — decode segment durations.
+            # softplus(raw_durations) > 0 guarantees positive durations;
+            # dividing by their sum and multiplying by tf renormalizes them
+            # to add up to exactly the total annealing time.
             D = _softplus(raw_durations)
             sig_D = _sigmoid(raw_durations)  # dD/d(raw_durations)
             Ssum = D.sum()
@@ -307,6 +464,11 @@ class SparseGRAPEModel:
             t_bounds = np.concatenate(([0.0], np.cumsum(scaled_durations)))
             t_bounds[-1] = tf  # guard against fp drift
 
+            # Step 2 — Jacobian of the segment boundary TIMES w.r.t. every
+            # duration parameter. Because of the "divide by the sum" step,
+            # perturbing ANY raw_durations[m] moves every later boundary, not
+            # just segment m's own edges — this is the "normalization
+            # coupling" flagged in the comment above.
             # dTb[k, m] = d(t_bounds[k]) / d(raw_durations[m])
             c = sig_D / Ssum
             ind = (np.arange(n_seg)[None, :] < np.arange(n_seg + 1)[:, None]).astype(
@@ -314,10 +476,20 @@ class SparseGRAPEModel:
             )
             dTb = c[None, :] * (tf * ind - t_bounds[:, None])  # (n_seg+1, n_seg)
 
+            # Step 3 — decode plateau heights via sigmoid into (0,1), and
+            # assemble the full waypoint list s_way = [0, plateau_1, ...,
+            # plateau_M, 1] (M+2 entries: the boundary values 0 and 1 are
+            # NOT free parameters).
             sig_S = _sigmoid(raw_splateaus)
-            dsig_S = sig_S * (1.0 - sig_S)
+            dsig_S = sig_S * (1.0 - sig_S)  # d(sigmoid)/d(raw_splateaus)
             s_way = np.concatenate(([0.0], sig_S, [1.0]))  # (M+2,)
 
+            # Step 4 — walk through the 2M+1 alternating ramp/plateau
+            # segments, filling in s(t) and its Jacobian ds_dtheta segment
+            # by segment. ds_dtheta packs BOTH parameter blocks into one
+            # (n_params, nsteps) array: rows [0:n_seg] are duration
+            # sensitivities, rows [n_seg:n_seg+M] are plateau-height
+            # sensitivities.
             s = np.zeros_like(t)
             ds_dtheta = np.zeros((n_params, self.nsteps))
 
@@ -329,33 +501,51 @@ class SparseGRAPEModel:
                 denom = (t1 - t0) if t1 > t0 else 1.0
 
                 if seg % 2 == 0:
-                    # ramp segment: linear interpolation between waypoints
+                    # Ramp segment (even index): linear interpolation
+                    # between waypoint k and k+1, k = seg // 2.
                     k = seg // 2
                     s0, s1_ = s_way[k], s_way[k + 1]
                     frac = (tm - t0) / denom
                     s[mask] = s0 + (s1_ - s0) * frac
 
-                    # duration sensitivity — couples to ALL n_seg durations
-                    # via the normalization (see dTb derivation)
+                    # -- duration sensitivity --
+                    # s = s0 + (s1-s0) * (t - t0)/(t1 - t0); differentiating
+                    # frac = (t-t0)/(t1-t0) w.r.t. any duration parameter via
+                    # the quotient rule (using dt0 = d t0/dtheta,
+                    # dt1 = d t1/dtheta from Step 2) gives dfrac below.
+                    # Because dt0/dt1 have contributions from every duration
+                    # parameter (Step 2), this couples the current segment's
+                    # shape to ALL n_seg durations, not just its own.
                     dfrac = (
                         dt0[:, None] * (tm[None, :] - t1)
                         - dt1[:, None] * (tm[None, :] - t0)
                     ) / denom**2  # (n_seg, n_masked)
                     ds_dtheta[:n_seg, mask] += (s1_ - s0) * dfrac
 
-                    # plateau-height sensitivity — only the two flanking
-                    # waypoints of this ramp segment contribute
+                    # -- plateau-height sensitivity --
+                    # s = (1-frac)*s0 + frac*s1, so ds/ds0 = (1-frac) and
+                    # ds/ds1 = frac; chain through d(s_way)/d(raw_splateaus)
+                    # = dsig_S. Only the two flanking waypoints of THIS ramp
+                    # contribute — guarded so the fixed boundaries (index 0
+                    # and index M+1 in s_way, which are not free parameters)
+                    # never receive a gradient contribution.
                     if k - 1 >= 0:
                         ds_dtheta[n_seg + (k - 1), mask] += (1 - frac) * dsig_S[k - 1]
                     if k <= M - 1:
                         ds_dtheta[n_seg + k, mask] += frac * dsig_S[k]
                 else:
-                    # plateau segment: constant value, no duration-dependence
+                    # Plateau segment (odd index): s is held constant at
+                    # s_way[k], k = (seg+1)//2, for the whole segment — so
+                    # there is no time-dependence and hence NO duration
+                    # sensitivity (a plateau's height doesn't change if you
+                    # stretch or shrink how long it lasts).
                     k = (seg + 1) // 2
                     s[mask] = s_way[k]
                     if k - 1 >= 0:
                         ds_dtheta[n_seg + (k - 1), mask] += dsig_S[k - 1]
 
+            # h_driver = 1 - s, h_target = s (no ramp envelope for LZS), so
+            # their theta-Jacobians are just -ds_dtheta and +ds_dtheta.
             h_driver = 1.0 - s
             h_target = s
             dh_drv = -ds_dtheta
@@ -365,7 +555,12 @@ class SparseGRAPEModel:
 
     # ─────────────────────────────────────────────────────────────────────────
     def get_driving(self, parameters=None) -> tuple:
-        """Returns (h_driver, h_target) as numpy arrays."""
+        """
+        Returns (h_driver, h_target) as numpy arrays, evaluated at
+        `parameters` (or at self.parameters if not given). Convenience
+        wrapper around _compute_driving_and_jacobian that discards the
+        Jacobian — use this when you just want to plot/inspect the schedule.
+        """
         if parameters is None:
             parameters = self.parameters
         h_drv, h_tgt, _, _ = self._compute_driving_and_jacobian(parameters)
@@ -378,6 +573,18 @@ class SparseGRAPEModel:
         segment boundary times and s-values actually used by get_driving(),
         decoded from the current self.parameters. Mirrors
         schedule_utils.Schedule.get_lzs_waypoints() / JaxSchedule's version.
+
+        Useful for: plotting the piecewise-linear schedule directly from
+        its waypoints, or comparing two optimized parameter sets to check
+        whether they represent genuinely different schedules (as opposed to
+        a relabelling/gauge-duplicate of the same waypoints — see the
+        "gauge-duplicate dedup check" item in the project's open tasks,
+        which is built on top of this method).
+
+        Returns
+        -------
+        t_bounds : (2M+2,) ndarray — segment boundary times, 0..tf
+        s_way    : (M+2,) ndarray  — waypoint s-values, s_way[0]=0, s_way[-1]=1
         """
         if self.type != "LZS":
             raise ValueError("get_lzs_waypoints() only valid for type='LZS'")
@@ -407,6 +614,27 @@ class SparseGRAPEModel:
         GRAPE         : dE/dh_x_i = -2 dt Im[⟨χ_i| H_x |ψ_i⟩]
         Chain rule    : grad[k] = Σ_i dE/dh_drv_i * ∂h_drv_i/∂θ_k
                                 + Σ_i dE/dh_tgt_i * ∂h_tgt_i/∂θ_k
+
+        This is the quantum-control analogue of backprop: the forward pass
+        is the "network", the co-state |χ_i> plays the role of the
+        upstream gradient signal being propagated backward through each
+        timestep, and dE/dh_x_i is the local gradient at that "layer"
+        (timestep) — exact, no finite differences, same asymptotic cost as
+        one extra forward pass.
+
+        Parameters
+        ----------
+        parameters : (n_params,) ndarray
+            theta to evaluate at (does NOT mutate self.parameters — callers
+            like forward_and_gradient() do that separately).
+        compute_grad : bool
+            If False, skip the backward pass entirely (cheaper — used when
+            an optimizer only needs a bare energy evaluation).
+
+        Returns
+        -------
+        energy : float
+        grad   : (n_params,) ndarray, or None if compute_grad=False
         """
         h_driver, h_target, dh_drv_dtheta, dh_tgt_dtheta = (
             self._compute_driving_and_jacobian(parameters)
@@ -414,6 +642,10 @@ class SparseGRAPEModel:
         dt = self.dt
 
         # ── forward pass ──────────────────────────────────────────────────────
+        # Standard piecewise-constant-Hamiltonian propagation: freeze H(t)
+        # over each small interval dt and apply exp(-i dt H) exactly via
+        # scipy's Krylov-subspace expm_multiply (avoids ever forming the
+        # dense matrix exponential, which is essential once dim gets large).
         psi = self._psi_init.copy()
         psi_fwd = [psi.copy()]  # psi_fwd[i] = |ψ_i⟩ before step i
 
@@ -431,6 +663,11 @@ class SparseGRAPEModel:
 
         # ── backward pass ─────────────────────────────────────────────────────
         # initial co-state: |χ_T⟩ = H_ref |ψ_T⟩
+        # The co-state chi plays the role of an "error signal" that we
+        # propagate backward in time using the ADJOINT (time-reversed)
+        # unitary: since H is Hermitian, the adjoint of exp(-i dt H) is
+        # exp(+i dt H), so we simply flip the sign in the exponent — no
+        # separate adjoint machinery required.
         chi = self._H_ref @ psi_final
 
         dE_dh_drv = np.zeros(self.nsteps)
@@ -445,12 +682,24 @@ class SparseGRAPEModel:
             psi_i = psi_fwd[i]
 
             # GRAPE: dE/dh_x_i = -2 dt Im[ ⟨ψ_i | H_x | χ_i⟩ ]
+            # This is the standard GRAPE per-timestep gradient formula: the
+            # sensitivity of the final energy to a small perturbation of the
+            # driving strength h_x at step i, expressed purely in terms of
+            # the forward state psi_i and backward co-state chi at that same
+            # step — no need to re-run the whole propagation for each
+            # parameter.
             dE_dh_drv[i] = -2.0 * dt * (psi_i.conj() @ self._H_driver @ chi).imag
             dE_dh_tgt[i] = -2.0 * dt * (psi_i.conj() @ self._H_target @ chi).imag
 
         # ── chain rule through schedule ───────────────────────────────────────
         # grad[k] = Σ_i [ dE/dh_drv_i * ∂h_drv_i/∂θ_k
         #               + dE/dh_tgt_i * ∂h_tgt_i/∂θ_k ]
+        # This is where the per-timestep GRAPE gradient (dE_dh_drv/dh_tgt,
+        # length nsteps) gets converted into a per-PARAMETER gradient (grad,
+        # length n_params) using the ansatz Jacobian computed at the very
+        # top of this function — a single matrix-vector product per schedule
+        # branch, thanks to _compute_driving_and_jacobian doing the
+        # analytic differentiation up front.
         grad = dh_drv_dtheta @ dE_dh_drv + dh_tgt_dtheta @ dE_dh_tgt  # (n_params,)
 
         return energy, grad
@@ -460,7 +709,14 @@ class SparseGRAPEModel:
     # ─────────────────────────────────────────────────────────────────────────
 
     def forward_and_gradient(self, parameters: np.ndarray):
-        """Returns (energy, grad) together — pass as jac=True to scipy minimize."""
+        """
+        Returns (energy, grad) together — pass as jac=True to scipy minimize.
+
+        Also updates self.parameters/self.energy and increments
+        self.run_number, so this is the method to call from an optimizer
+        (as opposed to _forward_and_grad, which is side-effect-light and
+        intended for internal use).
+        """
         self.parameters = parameters
         energy, grad = self._forward_and_grad(parameters, compute_grad=True)
         self.energy = energy
@@ -468,6 +724,7 @@ class SparseGRAPEModel:
         return energy, grad
 
     def forward(self, parameters: np.ndarray) -> float:
+        """Energy-only evaluation (no backward pass) — cheaper than forward_and_gradient."""
         self.parameters = parameters
         energy, _ = self._forward_and_grad(parameters, compute_grad=False)
         self.energy = energy
@@ -475,10 +732,18 @@ class SparseGRAPEModel:
         return energy
 
     def gradient(self, parameters: np.ndarray) -> np.ndarray:
+        """Gradient-only evaluation. Note: unlike forward()/forward_and_gradient(),
+        this does NOT update self.parameters/self.energy/self.run_number."""
         _, grad = self._forward_and_grad(parameters, compute_grad=True)
         return grad
 
     def callback(self, *args):
+        """
+        Optimizer callback (invoked once per ACCEPTED L-BFGS-B iteration,
+        not per internal line-search evaluation). Appends a snapshot of the
+        current energy/parameters/schedule/state to the history_* lists and
+        prints the current energy for live monitoring.
+        """
         self.history.append(self.energy)
         self.history_parameters.append(self.parameters.copy())
         self.history_drivings.append(self.get_driving())
@@ -488,6 +753,8 @@ class SparseGRAPEModel:
         print(self.energy)
 
     def load(self, parameters: np.ndarray):
+        """Overwrite self.parameters with a previously saved vector (e.g. to
+        resume/inspect a converged optimization). Raises on shape mismatch."""
         if parameters.shape[0] == self.parameters.shape[0]:
             self.parameters = parameters.copy()
         else:
@@ -515,6 +782,22 @@ class SparseGRAPETrainer:
         tol: float = 1e-3,
         verbose: bool = True,
     ):
+        """
+        Parameters
+        ----------
+        model : SparseGRAPEModel
+            The model to optimize (mutated in place — run() leaves
+            model.parameters/psi/history_* at the optimizer's final state).
+        maxiter, ftol, gtol : passed straight through to scipy's L-BFGS-B
+            (see scipy.optimize.minimize options for exact semantics).
+        tol : float
+            Currently unused by run() (L-BFGS-B is configured via ftol/gtol
+            instead) — kept for interface parity with JaxTrainer.
+        verbose : bool
+            If True, prints progress every accepted iteration (via
+            model.callback) and runs the finite-difference gradient check
+            described in run().
+        """
         self.model = model
         self.maxiter = maxiter
         self.ftol = ftol
@@ -525,6 +808,14 @@ class SparseGRAPETrainer:
         """
         Run L-BFGS-B with GRAPE gradients.
         Returns dict with identical keys to JaxTrainer.run().
+
+        Before optimizing, if verbose, does a one-parameter finite-difference
+        sanity check: perturbs parameter 0 by eps and compares the resulting
+        finite-difference slope to the analytic GRAPE gradient at that same
+        entry. This is a cheap way to catch a broken Jacobian (e.g. after
+        editing _compute_driving_and_jacobian) before spending time on a
+        full optimization run — a large relative error here means something
+        is wrong with the analytic gradient, not with the optimizer.
         """
         # ── gradient check at initial point ───────────────────────────────────
         p0 = self.model.parameters.copy()
