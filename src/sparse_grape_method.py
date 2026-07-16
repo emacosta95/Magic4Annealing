@@ -496,7 +496,7 @@ class SparseGRAPEModel:
             for seg in range(n_seg):
                 t0, t1 = t_bounds[seg], t_bounds[seg + 1]
                 dt0, dt1 = dTb[seg, :], dTb[seg + 1, :]  # (n_seg,) each
-                mask = (t >= t0) & (t <= t1)
+                mask = (t >= t0) & (t <= t1)  # heaviside condition
                 tm = t[mask]
                 denom = (t1 - t0) if t1 > t0 else 1.0
 
