@@ -4,3 +4,5 @@ results/
 /.vscode
 /src/__pycache__
 *.cpython-311.pyc
+/executables
+/generated
