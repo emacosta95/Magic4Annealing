@@ -4,6 +4,7 @@ from src.annealing_utils import (
     get_longitudinal_hamiltonian,
     get_driver_hamiltonian,
 )
+from src.sparse_grape_method import SparseGRAPEModel, SparseGRAPETrainer
 
 from src.hamiltonian_utils import frustrated_ring_jij_hz
 from src.utils import Z2SymmetricSector
@@ -60,6 +61,29 @@ time_steps = int(10 * tau)
 times = np.linspace(0, tau, time_steps)
 delta_t = times[1] - times[0]
 
+number_parameters = 2  # M=2 plateaus/arms -> n_params = 3*M+1 = 7, matching
+# Werner et al.'s reduction from Cote et al.'s ~100-parameter
+# variational schedule down to 7 parameters
+type = "LZS"
+
+model = SparseGRAPEModel(
+    initial_state=psi_init_s,
+    target_hamiltonian=target_hamiltonian_s,
+    initial_hamiltonian=driver_hamiltonian_s,
+    reference_hamiltonian=target_hamiltonian_s,
+    tf=tau,
+    number_of_parameters=number_parameters,
+    nsteps=time_steps,
+    type=type,
+    seed=6,
+    random=True,
+)
+
+trainer = SparseGRAPETrainer(model, verbose=True)
+opt_results = trainer.run()
+
+h_driver, h_target = model.get_driving()
+schedule = h_target
 
 dim_s = driver_hamiltonian_s.shape[0]
 psi = psi_init_s.copy()
@@ -76,7 +100,6 @@ entanglement_entropy = EntanglementEntropy(nqubits=nqubits, n_A=nqubits // 2)
 
 
 for i, t in enumerate(times):
-    schedule[i] = t / tau
     hamiltonian_t = (1 - schedule[i]) * driver_hamiltonian_s + (
         schedule[i]
     ) * target_hamiltonian_s
@@ -118,9 +141,7 @@ time_sub = times[::stride]
 # formateo consistente de T para evitar problemas de precisión en el nombre
 T_str = str(T)
 
-nombre_archivo = (
-    f"../../generated/FrustatedRing/QuantumResourcesvsT_T={T_str}_linear.npz"
-)
+nombre_archivo = f"../../generated/FrustatedRing/QuantumResourcesvsT_T={T_str}_LZR.npz"
 
 np.savez(
     nombre_archivo,

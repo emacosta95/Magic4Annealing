@@ -5,8 +5,8 @@ import os
 
 # --- configuración ---
 directorio = "../../generated/FrustatedRing"
-patron_archivo = os.path.join(directorio, "QuantumResourcesvsT_T=*_linear.npz")
-archivo_salida = os.path.join(directorio, "QuantumResourcesvsT_linear.npz")
+patron_archivo = os.path.join(directorio, "QuantumResourcesvsT_T=*_LZR.npz")
+archivo_salida = os.path.join(directorio, "QuantumResourcesvsT_LZR.npz")
 
 # T_MIN, T_MAX, STEP se leen de variables de entorno (definidas en submit.sh)
 # con valores por defecto por si se ejecuta manualmente sin pasarlas
@@ -24,7 +24,7 @@ except ValueError:
 print(f"Rango esperado: T_MIN={T_MIN}, T_MAX={T_MAX}, STEP={STEP}")
 
 # regex para extraer el T_str del nombre de archivo
-patron_regex = re.compile(r"QuantumResourcesvsT_T=([\d.]+)\_linear.npz$")
+patron_regex = re.compile(r"QuantumResourcesvsT_T=([\d.]+)\_LZR.npz$")
 
 archivos = sorted(
     glob.glob(patron_archivo), key=lambda f: int(patron_regex.search(f).group(1))
