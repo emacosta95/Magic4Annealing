@@ -2,3 +2,4 @@ data/
 results/
 *.code-workspace
 /.vscode
+*.cpython-311.pyc
