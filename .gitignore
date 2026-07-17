@@ -6,3 +6,4 @@ results/
 *.cpython-311.pyc
 /executables
 /generated
+/src/__pycache__
