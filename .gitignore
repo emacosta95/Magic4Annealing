@@ -7,3 +7,4 @@ results/
 /executables
 /generated
 /src/__pycache__
+/.venv
