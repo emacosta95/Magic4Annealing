@@ -4,7 +4,7 @@ import re
 import os
 
 # --- configuración ---
-directorio = "../generated/FrustatedRing"
+directorio = "../../generated/FrustatedRing"
 patron_archivo = os.path.join(directorio, "QuantumResourcesvsT_T=*.npz")
 archivo_salida = os.path.join(directorio, "QuantumResourcesvsT_combinado.npz")
 

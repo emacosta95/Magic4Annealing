@@ -118,7 +118,7 @@ time_sub = time[::stride]
 # formateo consistente de T para evitar problemas de precisión en el nombre
 T_str = str(T)
 
-nombre_archivo = f"../generated/FrustatedRing/QuantumResourcesvsT_T={T_str}.npz"
+nombre_archivo = f"../../generated/FrustatedRing/QuantumResourcesvsT_T={T_str}.npz"
 
 np.savez(
     nombre_archivo,
