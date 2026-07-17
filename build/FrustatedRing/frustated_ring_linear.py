@@ -101,16 +101,21 @@ p0 = probabilities[:, 0]
 p1 = probabilities[:, 1]
 
 magic = []
+magic_gs_level = []
 entanglement = []
+entanglement_gs_level = []
+
 
 # subsample if time_steps is large — SRE is O(4^N) per call
 stride = max(1, 10)
 
 for i in trange(0, time_steps, stride):
     state_full = sector.lift(psi_history_s[i])
+    gs_full = sector.lift(eigenstates_history_s[i, :, 0])
     magic.append(sre(psi_history_s[i]))
+    magic_gs_level.append(sre(eigenstates_history_s[i, :, 0]))
     entanglement.append(entanglement_entropy.von_neumann(state_full))
-
+    entanglement_gs_level.append(entanglement_entropy.von_neumann(gs_full))
 
 time_sub = times[::stride]
 
@@ -133,6 +138,8 @@ np.savez(
     time_sub=time_sub,
     magic=magic,
     entanglement=entanglement,
+    magic_gs_level=magic_gs_level,
+    entanglement_gs_level=entanglement_gs_level,
 )
 
 end = time.perf_counter()
