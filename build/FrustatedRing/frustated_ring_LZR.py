@@ -90,7 +90,6 @@ psi = psi_init_s.copy()
 
 spectrum = np.zeros((time_steps, nlevels))
 energy = np.zeros(time_steps)
-schedule = np.zeros(time_steps)
 probabilities = np.zeros((time_steps, nlevels))
 psi_history_s = np.zeros((time_steps, dim_s), dtype=complex)
 eigenstates_history_s = np.zeros((time_steps, dim_s, nlevels), dtype=complex)
