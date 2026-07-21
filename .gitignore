@@ -9,3 +9,4 @@ results/
 /src/__pycache__
 /.venv
 /magic4annealing.egg-info
+/images
