@@ -17,7 +17,7 @@ start = time.perf_counter()
 
 T = int(sys.argv[1])
 
-N = 9  # odd; N=9,11,13 feasible for full 2^N exact diagonalization
+N = 7  # odd; N=9,11,13 feasible for full 2^N exact diagonalization
 J, JL, JR = 1.0, 0.5, 0.45
 
 jij, hz = frustrated_ring_jij_hz(N, J, JL, JR)
@@ -56,7 +56,7 @@ tau = T  # try a range of tau; the ring is expected to need LARGE tau
 # for a linear ramp to reach the ground state (exponential
 # slowdown at the AC) -- this is exactly the motivation for
 # optimal control / LZS below.
-time_steps = int(10 * tau)
+time_steps = int(100 * tau)
 times = np.linspace(0, tau, time_steps)
 delta_t = times[1] - times[0]
 
@@ -96,6 +96,9 @@ for i, t in enumerate(times):
     ).real
     energy[i] = np.real(np.vdot(psi, hamiltonian_t @ psi))
     psi_history_s[i] = psi
+
+e0 = spectrum[:, 0]
+e1 = spectrum[:, 1]
 gap = spectrum[:, 1] - spectrum[:, 0]
 p0 = probabilities[:, 0]
 p1 = probabilities[:, 1]
@@ -131,6 +134,9 @@ np.savez(
     nombre_archivo,
     T=np.array([T]),  # guardamos T explícitamente también, por seguridad
     times=times,
+    evo_energy=energy,
+    e0=e0,
+    e1=e1,
     gap=gap,
     schedule=schedule,
     p0=p0,

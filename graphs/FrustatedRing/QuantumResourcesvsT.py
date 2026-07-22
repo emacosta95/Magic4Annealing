@@ -365,3 +365,75 @@ ani.save(
     writer="pillow",
     fps=0.3,
 )
+
+
+def animate_energies_linear(i):
+    ax_gif.clear()
+
+    idx = sequence_linear[i]
+    T = Tlist_linear_reduced[idx]
+
+    times = data_linear[T]["times"]
+    evo_energy = data_linear[T]["evo_energy"]
+    e0 = data_linear[T]["e0"]
+    e1 = data_linear[T]["e1"]
+    ax_gif.plot(
+        times, evo_energy, ".-", linewidth=1, markersize=4.5, label="Evolution Energy"
+    )
+    ax_gif.plot(times, e0, ".-", linewidth=1, markersize=4.5, label="E0")
+    ax_gif.plot(times, e1, ".-", linewidth=1, markersize=4.5, label="E1")
+
+    ax_gif.set_title(f"Energy (T = {T})")
+    ax_gif.set_xlabel(r"$t$")
+    ax_gif.set_ylabel("Energy")
+    ax_gif.legend()
+    ax_gif.grid()
+
+
+ani = animation.FuncAnimation(
+    fig_gif, animate_energies_linear, frames=len(sequence_linear), interval=1200
+)
+path = "/home/bsc/bsc504472/repos/Magic4Annealing/images/FrustatedRing/"
+if not os.path.exists(path):
+    os.makedirs(path)
+ani.save(
+    f"{path}Energies_linear.gif",
+    writer="pillow",
+    fps=0.3,
+)
+
+
+def animate_energies_LZR(i):
+    ax_gif.clear()
+
+    idx = sequence_LZR[i]
+    T = Tlist_LZR_reduced[idx]
+
+    times = data_LZR[T]["times"]
+    evo_energy = data_LZR[T]["evo_energy"]
+    e0 = data_LZR[T]["e0"]
+    e1 = data_LZR[T]["e1"]
+    ax_gif.plot(
+        times, evo_energy, ".-", linewidth=1, markersize=4.5, label="Evolution Energy"
+    )
+    ax_gif.plot(times, e0, ".-", linewidth=1, markersize=4.5, label="E0")
+    ax_gif.plot(times, e1, ".-", linewidth=1, markersize=4.5, label="E1")
+
+    ax_gif.set_title(f"Energy (T = {T})")
+    ax_gif.set_xlabel(r"$t$")
+    ax_gif.set_ylabel("Energy")
+    ax_gif.legend()
+    ax_gif.grid()
+
+
+ani = animation.FuncAnimation(
+    fig_gif, animate_energies_LZR, frames=len(sequence_LZR), interval=1200
+)
+path = "/home/bsc/bsc504472/repos/Magic4Annealing/images/FrustatedRing/"
+if not os.path.exists(path):
+    os.makedirs(path)
+ani.save(
+    f"{path}Energies_LZR.gif",
+    writer="pillow",
+    fps=0.3,
+)
