@@ -34,8 +34,12 @@ def load_data(archivo_salida):
     return resultado
 
 
+typeLZR = ""  # "_NoGrad" or ""
+
 data_linear = load_data("../../generated/FrustatedRing/QuantumResourcesvsT_linear.npz")
-data_LZR = load_data("../../generated/FrustatedRing/QuantumResourcesvsT_LZR.npz")
+data_LZR = load_data(
+    "../../generated/FrustatedRing/QuantumResourcesvsT_LZR" + typeLZR + ".npz"
+)
 
 Tlist_linear = sorted(data_linear.keys())
 Tlist_LZR = sorted(data_LZR.keys())
@@ -295,7 +299,7 @@ path = "/home/bsc/bsc504472/repos/Magic4Annealing/images/FrustatedRing/"
 if not os.path.exists(path):
     os.makedirs(path)
 ani.save(
-    f"{path}Probabilites_LZR.gif",
+    f"{path}Probabilites_LZR" + typeLZR + ".gif",
     writer="pillow",
     fps=0.3,
 )
@@ -361,7 +365,7 @@ path = "/home/bsc/bsc504472/repos/Magic4Annealing/images/FrustatedRing/"
 if not os.path.exists(path):
     os.makedirs(path)
 ani.save(
-    f"{path}Schedule_LZR.gif",
+    f"{path}Schedule_LZR" + typeLZR + ".gif",
     writer="pillow",
     fps=0.3,
 )
@@ -377,12 +381,18 @@ def animate_energies_linear(i):
     evo_energy = data_linear[T]["evo_energy"]
     e0 = data_linear[T]["e0"]
     e1 = data_linear[T]["e1"]
-    ax_gif.plot(
-        times, evo_energy, ".-", linewidth=1, markersize=4.5, label="Evolution Energy"
-    )
-    ax_gif.plot(times, e0, ".-", linewidth=1, markersize=4.5, label="E0")
-    ax_gif.plot(times, e1, ".-", linewidth=1, markersize=4.5, label="E1")
 
+    ax_gif.plot(times, e0, "-", linewidth=1.5, markersize=4.5, label="E0")
+    ax_gif.plot(times, e1, "-", linewidth=1.5, markersize=4.5, label="E1")
+    ax_gif.plot(
+        times,
+        evo_energy,
+        "--",
+        linewidth=1.5,
+        markersize=4.5,
+        label="Evolution Energy",
+        color="black",
+    )
     ax_gif.set_title(f"Energy (T = {T})")
     ax_gif.set_xlabel(r"$t$")
     ax_gif.set_ylabel("Energy")
@@ -413,12 +423,18 @@ def animate_energies_LZR(i):
     evo_energy = data_LZR[T]["evo_energy"]
     e0 = data_LZR[T]["e0"]
     e1 = data_LZR[T]["e1"]
-    ax_gif.plot(
-        times, evo_energy, ".-", linewidth=1, markersize=4.5, label="Evolution Energy"
-    )
-    ax_gif.plot(times, e0, ".-", linewidth=1, markersize=4.5, label="E0")
-    ax_gif.plot(times, e1, ".-", linewidth=1, markersize=4.5, label="E1")
 
+    ax_gif.plot(times, e0, "-", linewidth=1.5, markersize=4.5, label="E0")
+    ax_gif.plot(times, e1, "-", linewidth=1.5, markersize=4.5, label="E1")
+    ax_gif.plot(
+        times,
+        evo_energy,
+        "--",
+        linewidth=1.5,
+        markersize=4.5,
+        label="Evolution Energy",
+        color="black",
+    )
     ax_gif.set_title(f"Energy (T = {T})")
     ax_gif.set_xlabel(r"$t$")
     ax_gif.set_ylabel("Energy")
@@ -433,7 +449,7 @@ path = "/home/bsc/bsc504472/repos/Magic4Annealing/images/FrustatedRing/"
 if not os.path.exists(path):
     os.makedirs(path)
 ani.save(
-    f"{path}Energies_LZR.gif",
+    f"{path}Energies_LZR" + typeLZR + ".gif",
     writer="pillow",
     fps=0.3,
 )
