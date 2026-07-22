@@ -237,7 +237,7 @@ sequence_LZR = list(range(len(Tlist_LZR_reduced)))
 fig_gif, ax_gif = plt.subplots(figsize=(7, 5))
 
 
-def animate_linear(i):
+def animate_probs_linear(i):
     ax_gif.clear()
 
     idx = sequence_linear[i]
@@ -257,7 +257,7 @@ def animate_linear(i):
 
 
 ani = animation.FuncAnimation(
-    fig_gif, animate_linear, frames=len(sequence_linear), interval=1200
+    fig_gif, animate_probs_linear, frames=len(sequence_linear), interval=1200
 )
 path = "/home/bsc/bsc504472/repos/Magic4Annealing/images/FrustatedRing/"
 if not os.path.exists(path):
@@ -269,7 +269,7 @@ ani.save(
 )
 
 
-def animate_LZR(i):
+def animate_probs_LZR(i):
     ax_gif.clear()
 
     idx = sequence_LZR[i]
@@ -289,7 +289,7 @@ def animate_LZR(i):
 
 
 ani = animation.FuncAnimation(
-    fig_gif, animate_LZR, frames=len(sequence_LZR), interval=1200
+    fig_gif, animate_probs_LZR, frames=len(sequence_LZR), interval=1200
 )
 path = "/home/bsc/bsc504472/repos/Magic4Annealing/images/FrustatedRing/"
 if not os.path.exists(path):
