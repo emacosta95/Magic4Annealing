@@ -66,21 +66,26 @@ number_parameters = 2  # M=2 plateaus/arms -> n_params = 3*M+1 = 7, matching
 # variational schedule down to 7 parameters
 type = "LZS"
 
-model = SparseGRAPEModel(
-    initial_state=psi_init_s,
-    target_hamiltonian=target_hamiltonian_s,
-    initial_hamiltonian=driver_hamiltonian_s,
-    reference_hamiltonian=target_hamiltonian_s,
-    tf=tau,
-    number_of_parameters=number_parameters,
-    nsteps=time_steps,
-    type=type,
-    seed=6,
-    random=True,
-)
+best_result = None
+for i in range(100):
+    model_i = SparseGRAPEModel(
+        initial_state=psi_init_s,
+        target_hamiltonian=target_hamiltonian_s,
+        initial_hamiltonian=driver_hamiltonian_s,
+        reference_hamiltonian=target_hamiltonian_s,
+        tf=tau,
+        number_of_parameters=number_parameters,
+        nsteps=time_steps,
+        type=type,
+        seed=i,
+        random=True,
+    )
 
-trainer = SparseGRAPETrainer(model, verbose=True)
-opt_results = trainer.run()
+    trainer = SparseGRAPETrainer(model_i, verbose=True)
+    result = trainer.run()
+    if best_result is None or result["energy"] < best_result["energy"]:
+        opt_results = result
+        model = model_i
 
 h_driver, h_target = model.get_driving()
 schedule = h_target
