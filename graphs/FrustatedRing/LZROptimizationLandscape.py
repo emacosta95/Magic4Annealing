@@ -19,7 +19,7 @@ def final_energy_annealing(
     psi = psi0.copy()
 
     for i, t in enumerate(times):
-        s = schedule[i]
+        s = schedule[1][i]
         hamiltonian_t = (1 - s) * driver_hamiltonian_s + s * target_hamiltonian_s
         psi = expm_multiply(-1j * delta_t * hamiltonian_t, psi)
 
@@ -32,7 +32,6 @@ def energy_fn(
     theta,
     build_schedule,
     times,
-    tf,
     delta_t,
     psi0,
     driver_hamiltonian_s,
@@ -42,7 +41,7 @@ def energy_fn(
     Maps a parameter vector theta -> schedule -> final energy.
     build_schedule: function that, given theta and times, returns the schedule array.
     """
-    schedule = build_schedule(theta, times, tf)
+    schedule = build_schedule(theta, times)
     return final_energy_annealing(
         schedule, times, delta_t, psi0, driver_hamiltonian_s, target_hamiltonian_s
     )
@@ -139,7 +138,7 @@ def plot_landscape(A, B, E, coords, title="Energy landscape"):
     plt.show()
 
 
-def build_schedule(theta, t, tf):
+def build_schedule(theta, t):
     # Direct s(t) parametrization: h_driver=1-s, h_target=s, so BOTH
     # depend on the FULL parameter vector — unlike the branches
     # above, where driver/target params are disjoint. Durations are
@@ -147,6 +146,7 @@ def build_schedule(theta, t, tf):
     # single raw_duration_m shifts EVERY segment boundary, not just
     # its own segment — this couples all n_seg duration params
     # together in the Jacobian (see dTb below).
+    tf = times[-1]
     parameters = theta
     M = 2  # number of plateaus/arms
     n_seg = 5
@@ -243,7 +243,6 @@ def energy_fn_wrapper(theta):
         theta,
         build_schedule,
         times,
-        T,
         delta_t,
         psi_init_s,
         driver_hamiltonian_s,

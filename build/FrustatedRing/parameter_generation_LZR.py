@@ -79,7 +79,7 @@ for i in seed_list:
 
     trainer = SparseGRAPETrainer(model_i, verbose=True)
     result = trainer.run()
-    theta_list.append(result.parameters)
+    theta_list.append(result["parameters"])
 
 
 # formateo consistente de T para evitar problemas de precisión en el nombre
