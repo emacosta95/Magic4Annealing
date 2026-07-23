@@ -57,7 +57,7 @@ tau = T  # try a range of tau; the ring is expected to need LARGE tau
 # for a linear ramp to reach the ground state (exponential
 # slowdown at the AC) -- this is exactly the motivation for
 # optimal control / LZS below.
-time_steps = int(100 * tau)
+time_steps = int(10 * tau)
 times = np.linspace(0, tau, time_steps)
 delta_t = times[1] - times[0]
 
