@@ -115,7 +115,7 @@ def energy_landscape(theta1, theta2, theta3, energy_fn, resolution=30, margin=0.
     return A, B, E, coords
 
 
-def plot_landscape(A, B, E, coords, title="Energy landscape"):
+def plot_landscape(A, B, E, coords, title="Energy landscape", save_path=None):
     fig, ax = plt.subplots(figsize=(7, 6))
 
     cont = ax.contourf(A, B, E, levels=50, cmap="viridis")
@@ -135,7 +135,10 @@ def plot_landscape(A, B, E, coords, title="Energy landscape"):
         "equal"
     )  # important: since e1, e2 are orthonormal, this doesn't distort the plane
     plt.tight_layout()
+    if save_path is not None:
+        plt.savefig(save_path, dpi=300, bbox_inches="tight")
     plt.show()
+    return fig
 
 
 def build_schedule(theta, t):
@@ -311,4 +314,9 @@ theta3 = data["theta_list"][chosen_seeds[2]]
 A, B, E, coords = energy_landscape(
     theta1, theta2, theta3, energy_fn_wrapper, resolution=30
 )
-plot_landscape(A, B, E, coords)
+
+filename_img = f"../../images/FrustatedRing/LossLandscapeLZR_T={T}_N={N}_{chosen_seeds[0]}_{chosen_seeds[1]}_{chosen_seeds[2]}.png"
+
+plot_landscape(
+    A, B, E, coords, title=f"Energy landscape T={T} N={N}", save_path=filename_img
+)
