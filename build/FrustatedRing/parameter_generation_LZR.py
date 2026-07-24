@@ -1,14 +1,14 @@
-import numpy as np
-from src.annealing_utils import (
-    get_longitudinal_hamiltonian,
-    get_driver_hamiltonian,
-)
-from src.sparse_grape_method import SparseGRAPEModel, SparseGRAPETrainer
-
-from src.hamiltonian_utils import frustrated_ring_jij_hz
-from src.utils import Z2SymmetricSector
-
 import time
+
+import numpy as np
+
+from src.annealing_utils import (
+    get_driver_hamiltonian,
+    get_longitudinal_hamiltonian,
+)
+from src.hamiltonian_utils import frustrated_ring_jij_hz
+from src.sparse_grape_method import SparseGRAPEModel, SparseGRAPETrainer
+from src.utils import Z2SymmetricSector
 
 start = time.perf_counter()
 

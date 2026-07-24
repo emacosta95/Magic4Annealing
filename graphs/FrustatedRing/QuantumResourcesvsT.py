@@ -1,8 +1,8 @@
-import numpy as np
-import re
-import matplotlib.pyplot as plt
 import os
-import matplotlib.animation as animation
+import re
+
+import numpy as np
+from matplotlib import animation
 
 
 def load_data(archivo_salida):
