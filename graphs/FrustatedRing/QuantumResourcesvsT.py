@@ -228,6 +228,22 @@ plt.ylabel("Magic Integral")
 plt.legend()
 plt.show()
 
+plt.figure(figsize=(7, 5))
+plt.plot(
+    Tlist_LZR,
+    [data_LZR[T]["evo_energy"][-1] for T in Tlist_LZR],
+    ".-",
+    linewidth=1,
+    markersize=4.5,
+    label="LZR schedule",
+)
+plt.ylim(-4.6,-4.45)
+plt.xlabel("T")
+plt.ylabel("Energy at final time")
+plt.legend()
+plt.show()
+
+
 
 N_linear = len(Tlist_linear)
 N_LZR = len(Tlist_LZR)
