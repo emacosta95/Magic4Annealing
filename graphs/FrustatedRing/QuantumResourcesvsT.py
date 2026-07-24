@@ -228,28 +228,30 @@ plt.ylabel("Magic Integral")
 plt.legend()
 plt.show()
 
+final_energies = [data_LZR[T]["evo_energy"][-1] for T in Tlist_LZR]
 plt.figure(figsize=(7, 5))
 plt.plot(
     Tlist_LZR,
-    [data_LZR[T]["evo_energy"][-1] for T in Tlist_LZR],
+    final_energies,
     ".-",
     linewidth=1,
     markersize=4.5,
     label="LZR schedule",
 )
-plt.ylim(-4.6,-4.45)
+plt.ylim(-4.6, -4.45)
 plt.xlabel("T")
 plt.ylabel("Energy at final time")
 plt.legend()
 plt.show()
 
-
+print(np.min(final_energies))
+print(np.argmin(final_energies))
 
 N_linear = len(Tlist_linear)
 N_LZR = len(Tlist_LZR)
 
 Tlist_linear_reduced = [Tlist_linear[i] for i in range(0, N_linear, 20)]
-Tlist_LZR_reduced = [Tlist_LZR[i] for i in range(0, N_LZR, 20)]
+Tlist_LZR_reduced = [Tlist_LZR[i] + 11 for i in range(0, N_LZR - 1, 20)]
 
 
 sequence_linear = list(range(len(Tlist_linear_reduced)))
