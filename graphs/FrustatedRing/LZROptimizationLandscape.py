@@ -1,5 +1,6 @@
 import matplotlib.pyplot as plt
 import numpy as np
+from mpl_toolkits.axes_grid1 import make_axes_locatable
 from scipy.sparse.linalg import expm_multiply
 
 from src.annealing_utils import (
@@ -116,28 +117,70 @@ def energy_landscape(theta1, theta2, theta3, energy_fn, resolution=30, margin=0.
     return A, B, E, coords
 
 
-def plot_landscape(A, B, E, coords, title="Energy landscape", save_path=None):
-    fig, ax = plt.subplots(figsize=(7, 6))
+def plot_landscape(A, B, E, coords, energies, title="Energy landscape", save_path=None):
+    # rango real de datos
+    rango_a = A.max() - A.min()
+    rango_b = B.max() - B.min()
+    ratio = rango_b / rango_a
+
+    ancho_heatmap = 6  # pulgadas, tú decides el ancho
+    alto_heatmap = ancho_heatmap * ratio
+
+    alto_texto = 1.5  # pulgadas reservadas para la caja de texto abajo
+    alto_total = alto_heatmap + alto_texto
+
+    fig, ax = plt.subplots(
+        figsize=(ancho_heatmap + 1, alto_total)
+    )  # +1 por la colorbar
 
     cont = ax.contourf(A, B, E, levels=50, cmap="viridis")
-    plt.colorbar(cont, ax=ax, label="Final energy")
 
-    # mark the 3 original points
+    # colorbar con tamaño fijo relativo al heatmap, no a toda la figura
+    divider = make_axes_locatable(ax)
+    cax = divider.append_axes("right", size="5%", pad=0.1)  # 5% del ancho del heatmap
+    plt.colorbar(cont, cax=cax, label="Final energy")
+
+    nombres_latex = {
+        "theta1": r"$\theta_1$",
+        "theta2": r"$\theta_2$",
+        "theta3": r"$\theta_3$",
+    }
+
     for name, (a, b) in coords.items():
         ax.plot(a, b, "o", color="red", markersize=8)
         ax.annotate(
-            name, (a, b), textcoords="offset points", xytext=(6, 6), color="white"
+            nombres_latex[name],
+            (a, b),
+            textcoords="offset points",
+            xytext=(6, 6),
+            color="white",
+            fontsize=12,
         )
 
-    ax.set_xlabel("a (direction e1)")
-    ax.set_ylabel("b (direction e2)")
+    ax.set_xlabel("a (direction $e_1$)")
+    ax.set_ylabel("b (direction $e_2$)")
     ax.set_title(title)
-    ax.set_aspect(
-        "equal"
-    )  # important: since e1, e2 are orthonormal, this doesn't distort the plane
-    plt.tight_layout()
+    ax.set_aspect("equal")
+
+    # bottom como fracción del alto total
+    fig.subplots_adjust(bottom=alto_texto / alto_total)
+
+    texto_energias = "       ".join(
+        [rf"{nombres_latex[name]}: $E$ = {energies[name]:.6f}" for name in coords]
+    )
+    fig.text(
+        0.5,
+        0.2,
+        texto_energias,
+        fontsize=10,
+        ha="center",
+        va="center",
+        bbox=dict(boxstyle="round", facecolor="whitesmoke", edgecolor="gray"),
+    )
+
     if save_path is not None:
-        plt.savefig(save_path, dpi=300, bbox_inches="tight")
+        plt.savefig(save_path, dpi=300)
+
     plt.show()
     return fig
 
@@ -306,18 +349,30 @@ type = "LZS"
 
 filename = f"../../generated/FrustatedRing/ParametersLZR_T={T}_N={N}.npz"
 data = np.load(filename)
-chosen_seeds = [2, 4, 6]
+chosen_seeds = [6, 8, 14]
 
 theta1 = data["theta_list"][chosen_seeds[0]]
 theta2 = data["theta_list"][chosen_seeds[1]]
 theta3 = data["theta_list"][chosen_seeds[2]]
 
 A, B, E, coords = energy_landscape(
-    theta1, theta2, theta3, energy_fn_wrapper, resolution=30
+    theta1, theta2, theta3, energy_fn_wrapper, resolution=50
 )
 
 filename_img = f"../../images/FrustatedRing/LossLandscapeLZR_T={T}_N={N}_{chosen_seeds[0]}_{chosen_seeds[1]}_{chosen_seeds[2]}.png"
 
+energies = {
+    "theta1": energy_fn_wrapper(theta1),
+    "theta2": energy_fn_wrapper(theta2),
+    "theta3": energy_fn_wrapper(theta3),
+}
+
 plot_landscape(
-    A, B, E, coords, title=f"Energy landscape T={T} N={N}", save_path=filename_img
+    A,
+    B,
+    E,
+    coords,
+    energies,
+    title=f"Energy landscape T={T} N={N}",
+    save_path=filename_img,
 )
