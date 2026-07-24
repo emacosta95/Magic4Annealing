@@ -1,10 +1,11 @@
+import matplotlib.pyplot as plt
 import numpy as np
 from scipy.sparse.linalg import expm_multiply
+
 from src.annealing_utils import (
-    get_longitudinal_hamiltonian,
     get_driver_hamiltonian,
+    get_longitudinal_hamiltonian,
 )
-import matplotlib.pyplot as plt
 from src.hamiltonian_utils import frustrated_ring_jij_hz
 from src.utils import Z2SymmetricSector
 
