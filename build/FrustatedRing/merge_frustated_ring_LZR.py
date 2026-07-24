@@ -11,9 +11,9 @@ archivo_salida = os.path.join(directorio, "QuantumResourcesvsT_LZR.npz")
 # T_MIN, T_MAX, STEP se leen de variables de entorno (definidas en submit.sh)
 # con valores por defecto por si se ejecuta manualmente sin pasarlas
 try:
-    T_MIN = int(os.environ.get("T_MIN", 5))
-    T_MAX = int(os.environ.get("T_MAX", 400))
-    STEP = int(os.environ.get("STEP", 5))
+    T_MIN = int(os.environ.get("T_MIN", 1))
+    T_MAX = int(os.environ.get("T_MAX", 200))
+    STEP = int(os.environ.get("STEP", 1))
 except ValueError:
     raise RuntimeError(
         "T_MIN, T_MAX o STEP no son enteros válidos. "
