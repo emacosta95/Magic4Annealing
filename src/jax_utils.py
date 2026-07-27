@@ -525,321 +525,30 @@ class JaxTrainer:
         }
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-class JaxTrainer:
-    """
-    Handles optimization of a JaxSchedulerModel.
-    Call trainer.run() and get results back as plain numpy/python objects.
-    """
-
-    def __init__(
-        self,
-        model: JaxSchedulerModel,
-        maxiter: int = 1000,
-        tol: float = 1e-6,
-        ftol: float = 1e-9,
-        gtol: float = 1e-6,
-        verbose: bool = True,
-    ):
-        self.model = model
-        self.maxiter = maxiter
-        self.tol = tol
-        self.ftol = ftol
-        self.gtol = gtol
-        self.verbose = verbose
-        self.result = None
-
-    # ─────────────────────────────────────────────────────────────────────────
-    def run(self) -> dict:
-        """
-        Run L-BFGS-B with exact gradients.
-        Returns a dict with all results as numpy arrays — no jax objects.
-        """
-        res = minimize(
-            self.model.forward,
-            self.model.parameters,
-            jac=self.model.gradient,
-            method="L-BFGS-B",
-            tol=self.tol,
-            callback=self.model.callback if self.verbose else None,
-            options={
-                "maxiter": self.maxiter,
-                "ftol": self.ftol,
-                "gtol": self.gtol,
-            },
-        )
-        self.result = res
-
-        # final forward pass to sync model state
-        self.model.forward(res.x)
-        h_driver, h_target = self.model.get_driving()
-
-        if self.verbose:
-            print(f"\nOptimization success : {res.success}")
-            print(f"Final energy         : {res.fun:.6f}")
-            print(f"Message              : {res.message}")
-
-        return {
-            "success": bool(res.success),
-            "message": res.message,
-            "n_iterations": int(res.nit),
-            "n_evals": int(res.nfev),
-            "energy": float(res.fun),
-            "parameters": np.array(res.x),
-            "psi": self.model.psi.copy(),
-            "h_driver": h_driver,
-            "h_target": h_target,
-            "time": self.model.time.copy(),
-            "history_energy": list(self.model.history),
-            "history_parameters": [p.copy() for p in self.model.history_parameters],
-            "history_drivings": self.model.history_drivings,
-            "history_psi": [p.copy() for p in self.model.history_psi],
-        }
-
-
-##### MEMORY INEFFICIENT CODE
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Core idea:
-# Every n-qubit Pauli P = i^k * X^a Z^b  where a,b in {0,1}^n
-# <psi|P|psi> can be computed without building the full 2^n x 2^n matrix.
-# For a state psi in the computational basis:
-#
-#   <psi|X^a Z^b|psi> = sum_{x} psi*(x) * (-1)^{x.b} * psi(x XOR a)
-#
-# where x is a computational basis index, x.b is the bitwise dot product,
-# and x XOR a is the bit-flip by a.
-# This is O(2^n) per Pauli — but we can vectorize over all 4^n Paulis at once.
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-# def _build_binary_reps(n: int):
-#     """
-#     Build all 4^n Pauli labels as (a, b) pairs where a,b in {0,1}^n.
-#     Returns:
-#         a_vecs : (4^n, n) int8 array — X part of each Pauli
-#         b_vecs : (4^n, n) int8 array — Z part of each Pauli
-#     """
-#     n_paulis = 4**n
-#     # enumerate all (a, b) pairs in base-4: digit k -> (a_k, b_k)
-#     # 0=I(00), 1=X(10), 2=Y(11), 3=Z(01)
-#     pauli_map = np.array([[0, 0], [1, 0], [1, 1], [0, 1]], dtype=np.int8)  # (4, 2)
-
-#     indices = np.arange(n_paulis, dtype=np.int32)
-#     a_vecs = np.zeros((n_paulis, n), dtype=np.int8)
-#     b_vecs = np.zeros((n_paulis, n), dtype=np.int8)
-
-#     tmp = indices.copy()
-#     for k in range(n - 1, -1, -1):
-#         digit = tmp % 4
-#         a_vecs[:, k] = pauli_map[digit, 0]
-#         b_vecs[:, k] = pauli_map[digit, 1]
-#         tmp = tmp // 4
-
-#     return a_vecs, b_vecs
-
-
-# def _build_xor_table(n: int):
-#     """
-#     Precompute XOR table: for each basis index x (0..2^n-1) and each Pauli a,
-#     we need x XOR a_int where a_int = sum_k a_k * 2^(n-1-k).
-#     Returns a_int : (4^n,) int32 array — integer representation of X parts.
-#     """
-#     a_vecs, b_vecs = _build_binary_reps(n)
-#     n_paulis = 4**n
-#     dim = 2**n
-
-#     # integer representation of a (X part) — for XOR
-#     powers = (2 ** np.arange(n - 1, -1, -1)).astype(np.int32)
-#     a_int = (a_vecs @ powers).astype(np.int32)  # (4^n,)
-
-#     # integer dot product b.x for all x and all Paulis
-#     # b_dot_x[p, x] = sum_k b_vecs[p,k] * bit_k(x)   mod 2
-#     # We'll compute this as a (4^n, 2^n) binary matrix
-#     x_vals = np.arange(dim, dtype=np.int32)  # (2^n,)
-#     # bit_matrix[x, k] = k-th bit of x
-#     bit_matrix = ((x_vals[:, None] >> np.arange(n - 1, -1, -1)[None, :]) & 1).astype(
-#         np.int8
-#     )
-#     # b_dot_x[p, x] = (b_vecs[p] . bit_matrix[x]) mod 2
-#     b_dot_x = (b_vecs @ bit_matrix.T) % 2  # (4^n, 2^n)
-#     signs = 1 - 2 * b_dot_x  # (4^n, 2^n): +1 or -1
-
-#     return a_int, signs
-
-
-# class SREJax:
-#     """
-#     Stabilizer Rényi Entropy at n=2 using JAX.
-
-#     M_2(psi) = -log(sum_P <psi|P|psi>^4) - n*log(2)
-
-#     Algorithm:
-#         For each Pauli P = X^a Z^b:
-#             <psi|P|psi> = sum_x psi*(x) * (-1)^{x.b} * psi(x XOR a)
-#                         = sum_x conj(psi[x]) * sign[x] * psi[x XOR a]
-
-#     This vectorizes over all 4^n Paulis simultaneously using precomputed
-#     XOR indices and sign tables — no matrix exponentiation, no dense Pauli
-#     tensor, memory scales as O(4^n + 2^n) not O(4^n * 2^n * 2^n).
-
-#     Parameters
-#     ----------
-#     n_qubits : int
-#     batch_size : int
-#         Number of Paulis to process per JAX call. Tune to fit GPU/CPU memory.
-#         Default 4096 works well for n=10 on CPU.
-#     """
-
-#     def __init__(self, n_qubits: int, batch_size: int = 4096):
-#         self.n = n_qubits
-#         self.dim = 2**n_qubits
-#         self.n_paulis = 4**n_qubits
-#         self.batch_size = batch_size
-
-#         print(f"Building Pauli tables for n={n_qubits} ({self.n_paulis} Paulis)...")
-#         a_int, signs = _build_xor_table(n_qubits)
-
-#         # store as jax arrays
-#         self._a_int = jnp.array(a_int, dtype=jnp.int32)  # (4^n,)
-#         self._signs = jnp.array(signs, dtype=jnp.float64)  # (4^n, 2^n)
-#         self._x_idx = jnp.arange(self.dim, dtype=jnp.int32)  # (2^n,)
-#         print("Done.")
-
-#     # ─────────────────────────────────────────────────────────────────────────
-#     @partial(jax.jit, static_argnums=(0,))
-#     def _xi_batch(
-#         self, psi: jnp.ndarray, a_int_batch: jnp.ndarray, signs_batch: jnp.ndarray
-#     ) -> jnp.ndarray:
-#         """
-#         Compute <psi|P|psi> for a batch of Paulis.
-#         psi          : (2^n,) complex
-#         a_int_batch  : (batch,) int32
-#         signs_batch  : (batch, 2^n) float64
-#         Returns      : (batch,) float64
-#         """
-#         # psi[x XOR a] for each Pauli in batch: shape (batch, 2^n)
-#         x_xor_a = jnp.bitwise_xor(
-#             self._x_idx[None, :], a_int_batch[:, None]
-#         )  # (batch, 2^n)
-#         psi_flipped = psi[x_xor_a]  # (batch, 2^n) complex
-
-#         # <psi|P|psi> = sum_x conj(psi[x]) * sign[x] * psi[x XOR a]
-#         xi = jnp.einsum(
-#             "x,px,px->p",
-#             psi.conj(),
-#             signs_batch,
-#             psi_flipped,
-#         ).real  # (batch,) float64
-
-#         return xi
-
-#     # ─────────────────────────────────────────────────────────────────────────
-#     def characteristic_function(self, psi: np.ndarray) -> np.ndarray:
-#         """
-#         Compute Xi(P) = <psi|P|psi> for all 4^n Paulis.
-#         Returns numpy array of shape (4^n,).
-#         """
-#         psi = jnp.array(psi / np.linalg.norm(psi), dtype=jnp.complex128)
-#         xi = np.zeros(self.n_paulis, dtype=np.float64)
-
-#         for start in range(0, self.n_paulis, self.batch_size):
-#             end = min(start + self.batch_size, self.n_paulis)
-#             xi[start:end] = np.array(
-#                 self._xi_batch(
-#                     psi,
-#                     self._a_int[start:end],
-#                     self._signs[start:end],
-#                 )
-#             )
-
-#         return xi
-
-#     # ─────────────────────────────────────────────────────────────────────────
-#     def __call__(self, psi: np.ndarray) -> float:
-#         """
-#         M_2(psi) = -log(sum_P Xi(P)^4) - n*log(2)
-#         """
-#         xi = self.characteristic_function(psi)
-#         return float(-np.log(np.sum(xi**4)) + self.n * np.log(2))
-
-#     # ─────────────────────────────────────────────────────────────────────────
-#     def along_path(self, psi_history: np.ndarray, verbose: bool = True) -> np.ndarray:
-#         """
-#         Compute M_2 along a full annealing trajectory.
-
-#         psi_history : (nsteps, 2^n) complex array
-#         Returns     : (nsteps,) float64 array
-#         """
-#         nsteps = psi_history.shape[0]
-#         m2 = np.zeros(nsteps)
-
-#         for i in range(nsteps):
-#             m2[i] = self(psi_history[i])
-#             if verbose and i % 10 == 0:
-#                 print(f"  SRE step {i}/{nsteps}: M2={m2[i]:.4f}")
-
-#         return m2
-
-#     # ─────────────────────────────────────────────────────────────────────────
-#     def along_path_fast(
-#         self, psi_history: np.ndarray, verbose: bool = True
-#     ) -> np.ndarray:
-#         """
-#         Faster version: processes all time steps together per Pauli batch.
-#         Better cache usage when nsteps is large.
-
-#         psi_history : (nsteps, 2^n) complex array
-#         Returns     : (nsteps,) float64 array
-#         """
-#         nsteps = psi_history.shape[0]
-#         norms = np.linalg.norm(psi_history, axis=1, keepdims=True)
-#         psi_n = jnp.array(psi_history / norms, dtype=jnp.complex128)
-
-#         # sum_P xi^4 accumulated over batches
-#         sum_xi4 = np.zeros(nsteps, dtype=np.float64)
-
-#         for start in range(0, self.n_paulis, self.batch_size):
-#             end = min(start + self.batch_size, self.n_paulis)
-#             a_batch = self._a_int[start:end]  # (batch,)
-#             signs_batch = self._signs[start:end]  # (batch, 2^n)
-
-#             # compute xi for all time steps and this Pauli batch
-#             # xi[t, p] = <psi_t|P_p|psi_t>
-#             xi_batch = np.array(
-#                 jax.vmap(lambda psi: self._xi_batch(psi, a_batch, signs_batch))(psi_n)
-#             )  # (nsteps, batch)
-
-#             sum_xi4 += np.sum(xi_batch**4, axis=1)  # (nsteps,)
-
-#             if verbose and start % (self.batch_size * 10) == 0:
-#                 print(f"  Pauli batch {start}/{self.n_paulis}")
-
-#         m2 = -np.log(sum_xi4) + self.n * np.log(2)
-#         return m2
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-
-#### MEMORY INEFFICIENT CODE || END
-
-
 # src/jax_utils.py  — memory-safe version for large n
 
 
 def _build_binary_reps(n: int):
     """Same as before — lightweight, O(4^n) int8."""
     n_paulis = 4**n
+    # this are the values of X and Z, if X is applied you get a 1 in the first slot.
+    # Z is a 1 in the right slot, Y (up to a phase) is both ([1,1]). Identiy is nothing ([0,0])
     pauli_map = np.array([[0, 0], [1, 0], [1, 1], [0, 1]], dtype=np.int8)
+    # mapping the pauli string with indices
     indices = np.arange(n_paulis, dtype=np.int32)
+    # the binary encoding for the Xs and Zs (a,b)
     a_vecs = np.zeros((n_paulis, n), dtype=np.int8)
     b_vecs = np.zeros((n_paulis, n), dtype=np.int8)
+    #
     tmp = indices.copy()
-    for k in range(n - 1, -1, -1):
-        digit = tmp % 4
-        a_vecs[:, k] = pauli_map[digit, 0]
+
+    for k in range(n - 1, -1, -1):  # it goes downwards, following the start, stop, step
+        digit = (
+            tmp % 4
+        )  # start from the last q4it, every number from 0 to 3 give a different pauli (or identity)
+        a_vecs[:, k] = pauli_map[digit, 0]  # initialize it in binary form for a and b
         b_vecs[:, k] = pauli_map[digit, 1]
-        tmp = tmp // 4
+        tmp = tmp // 4  # go to the next q4it, to repet the process
     return a_vecs, b_vecs
 
 
@@ -851,7 +560,9 @@ def _build_pauli_indices_only(n: int):
     Does NOT build the (4^n, 2^n) signs table.
     """
     a_vecs, b_vecs = _build_binary_reps(n)
-    powers = (2 ** np.arange(n - 1, -1, -1)).astype(np.int32)
+    powers = (2 ** np.arange(n - 1, -1, -1)).astype(
+        np.int32
+    )  # this is important to give the corresponding 4inary integer
     a_int = (a_vecs @ powers).astype(np.int32)
     return a_int, b_vecs  # b_vecs is (4^n, n) int8 — fine for n=12: 16M×12 = 192 MB
 
@@ -891,6 +602,8 @@ class SREJax:
             (x_vals[:, None] >> np.arange(n_qubits - 1, -1, -1)[None, :]) & 1
         ).astype(np.int8)
         self._bit_matrix = jnp.array(bit_matrix, dtype=jnp.int8)  # (2^n, n)
+
+        self._pauli_weight = self._compute_pauli_weights()
         print("Done.")
 
     @partial(jax.jit, static_argnums=(0,))
@@ -935,76 +648,111 @@ class SREJax:
     def __call__(self, psi: np.ndarray) -> float:
         return self.sre(psi)
 
-
-class JaxTrainer:
-    """
-    Handles optimization of a JaxSchedulerModel.
-    Call trainer.run() and get results back as plain numpy/python objects.
-    """
-
-    def __init__(
-        self,
-        model: JaxSchedulerModel,
-        maxiter: int = 1000,
-        tol: float = 1e-6,
-        ftol: float = 1e-9,
-        gtol: float = 1e-6,
-        verbose: bool = True,
-    ):
-        self.model = model
-        self.maxiter = maxiter
-        self.tol = tol
-        self.ftol = ftol
-        self.gtol = gtol
-        self.verbose = verbose
-        self.result = None
-
-    # ─────────────────────────────────────────────────────────────────────────
-    def run(self) -> dict:
+    def _compute_pauli_weights(self) -> np.ndarray:
         """
-        Run L-BFGS-B with exact gradients.
-        Returns a dict with all results as numpy arrays — no jax objects.
+        Weight (# non-identity qubits) of every Pauli, indexed exactly like
+        a_int / b_vecs / characteristic_function's output.
         """
-        res = minimize(
-            self.model.forward,
-            self.model.parameters,
-            jac=self.model.gradient,
-            method="L-BFGS-B",
-            tol=self.tol,
-            callback=self.model.callback if self.verbose else None,
-            options={
-                "maxiter": self.maxiter,
-                "ftol": self.ftol,
-                "gtol": self.gtol,
-            },
-        )
-        self.result = res
+        tmp = np.arange(self.n_paulis, dtype=np.int64)
+        weight = np.zeros(self.n_paulis, dtype=np.int32)
+        for _ in range(self.n):
+            # we start considering the value of the last qu4it
+            digit = tmp % 4
+            # if is different from zero it has a pauli so a +1 in the weight
+            weight += digit != 0
+            # let's move to the next q4it
+            tmp //= 4
+        return weight
 
-        # final forward pass to sync model state
-        self.model.forward(res.x)
-        h_driver, h_target = self.model.get_driving()
+    def average_pauli_weight(self, psi: np.ndarray) -> float:
+        """
+        <k>_psi = sum_P [Xi(P)^2 / 2^n] * weight(P)
 
-        if self.verbose:
-            print(f"\nOptimization success : {res.success}")
-            print(f"Final energy         : {res.fun:.6f}")
-            print(f"Message              : {res.message}")
+        Expectation of the Pauli weight under the probability distribution
+        Xi(P) = <psi|P|psi>^2 / 2^n over the full 4^n-element Pauli group
+        (this distribution sums to 1 — standard identity for pure states).
+        """
+        xi = self.characteristic_function(psi)
+        prob = xi**2 / np.sum(xi**2)
+        return float(np.sum(prob * self._pauli_weight))
+
+    def weight_distribution(self, psi: np.ndarray) -> np.ndarray:
+        """
+        W(k) = sum_{wt(P)=k} Xi(P)^2 / 2^n, shape (n+1,), sums to 1.
+        This is exactly <psi|P|psi>^2 binned by Pauli weight.
+        """
+        xi = self.characteristic_function(psi)
+        prob = xi**2 / np.sum(xi**2)
+        return np.bincount(self._pauli_weight, weights=prob, minlength=self.n + 1)
+
+    def magic_per_weight(self, psi: np.ndarray, tol: float = 1e-2) -> dict:
+        """
+        M_2(k) = -log( sum_{wt(P)=k} Xi(P)^4 / N_k ),
+        N_k = #{P : wt(P)=k, |<psi|P|psi>| = 1}  (psi is an eigenstate of P).
+        NaN where N_k = 0 — the measure is undefined there (no deterministic
+        weight-k Pauli for this state), not zero.
+
+        Also returns "m2_per_weight_2n_norm": same numerator normalized by 2^n
+        like the full SRE (-log(sum Xi^4) + n*log2). Always defined, but NOT a
+        linear decomposition of the total M_2 — a per-weight diagnostic only.
+        """
+        xi = self.characteristic_function(psi)
+        xi4 = xi**4
+        xi2 = xi**2
+        w = self._pauli_weight
+        is_nonzero = np.abs(xi) > tol
+
+        sum_xi4 = np.bincount(w, weights=xi4, minlength=self.n + 1)
+        sum_xi2 = np.bincount(w, weights=xi2, minlength=self.n + 1)
+        counts_nonzero = np.bincount(w[is_nonzero], minlength=self.n + 1)
+        counts_total = np.bincount(w, minlength=self.n + 1)
+
+        with np.errstate(divide="ignore", invalid="ignore"):
+            m2_k = -np.log((sum_xi4) / (sum_xi2))
+
+        sector_prob = sum_xi4 / sum_xi2
+        m2_k[sector_prob < tol] = np.nan  # e.g. <1 part in a million of total weight
+
+        m2_k_norm = -np.log(sum_xi4) + self.n * np.log(2.0)
 
         return {
-            # optimization results
-            "success": bool(res.success),
-            "message": res.message,
-            "n_iterations": int(res.nit),
-            "n_evals": int(res.nfev),
-            # physics results — all numpy
-            "energy": float(res.fun),
-            "parameters": np.array(res.x),
-            "psi": self.model.psi.copy(),  # numpy complex128
-            "h_driver": h_driver,  # numpy float64
-            "h_target": h_target,
-            "time": self.model.time.copy(),
-            # full history
-            "history_energy": list(self.model.history),
-            "history_parameters": [p.copy() for p in self.model.history_parameters],
-            "history_drivings": self.model.history_drivings,
-            "history_psi": [p.copy() for p in self.model.history_psi],
+            "m2_per_weight": m2_k,
+            "m2_per_weight_2n_norm": m2_k_norm,
+            "counts_pm1": counts_nonzero,
+            "counts_total": counts_total,
+            "sum_xi2": sum_xi2,
+        }
+
+    def characteristic_function_per_weight(self, psi: np.ndarray, k: int) -> dict:
+        """
+        Xi(P)^2 / \sum_P Xi(P)^2 for each weight-k Pauli — same normalization as the full
+        Pauli spectrum (weight_distribution sums this over all P in a bin;
+        this returns the un-summed per-Pauli values for wt(P) = k).
+        Entries sum to weight_distribution(psi)[k], not to 1.
+
+        Returns
+        -------
+        dict with:
+            "prob"    : (N_k,) Xi(P)^2 / 2^n for each weight-k Pauli
+            "xi"      : (N_k,) raw Xi(P) values for those Paulis
+            "a_int"   : (N_k,) X-part index for those Paulis
+            "b_vecs"  : (N_k, n) Z-part index for those Paulis
+            "indices" : (N_k,) positions into the full 4^n Pauli ordering
+        """
+        if not (0 <= k <= self.n):
+            raise ValueError(f"k must be in [0, {self.n}], got {k}")
+
+        xi = self.characteristic_function(psi)
+        mask = self._pauli_weight == k
+        indices = np.nonzero(mask)[0]
+
+        xi_k = xi[mask]
+        prob = xi_k**4 / (2**self.n)
+
+        return {
+            "prob": prob,
+            "xi": xi_k,
+            "a_int": np.array(self._a_int)[indices],
+            "b_vecs": np.array(self._b_vecs)[indices],
+            "indices": indices,
         }
