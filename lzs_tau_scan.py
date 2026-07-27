@@ -7,13 +7,13 @@ FrustratedRing.ipynb ("Optimal Control — LZS scheduler" section):
 
     N=7, (J, JL, JR) = (1.0, 0.5, 0.45), Z2 +1-sector projection
     LZS schedule, M=2 plateaus (number_of_parameters=2 -> 7 raw parameters)
-    JaxSchedulerModel + JaxTrainer (exact gradients, L-BFGS-B),
+    SparseGRAPEModel + SparseGRAPETrainer (analytic GRAPE gradients, L-BFGS-B),
         maxiter=500, tol=1e-6, ftol=1e-5, gtol=1e-4
     time_steps = int(30 * tau)
 
-For each tau in a sweep, 10 independent optimizations are run (seeds 1..10,
-random LZS parameter initialization), in parallel across (tau, seed) pairs.
-For every (tau, seed) run we record:
+For each tau in a sweep, a single deterministic optimization is run
+(random=False -> all-zeros parameter initialization, no seed sweep), in
+parallel across tau values. For every tau run we record:
 
     - energy(t)                  (full time resolution, cheap to compute)
     - magic M2(t)                (subsampled, stride=10 -- O(4^N) per call)
@@ -21,14 +21,14 @@ For every (tau, seed) run we record:
     - final energy, energy error vs the true target ground energy
     - max magic, max entanglement over the trajectory
 
-All 10 seeds for a given tau are saved together in one file:
+Each tau's result is saved in its own file:
     data/lzs_scan/lzs_scan_tau{tau:07.2f}.npz
 
 Usage
 -----
     python lzs_tau_scan.py
     python lzs_tau_scan.py --taus 5 10 20 30 50 70 100 150 200 250 300 \
-                           --seeds 1 2 3 4 5 6 7 8 9 10 --workers 6
+                           --workers 6
 """
 
 import argparse
@@ -53,8 +53,10 @@ OPT_GTOL = 1e-4
 
 STRIDE = 10  # magic/entanglement subsampling, matches the notebook
 
+SEED = 42  # unused by the optimization itself (random=False -> zeros init),
+           # kept only for SparseGRAPEModel's constructor signature
+
 DEFAULT_TAUS = [5, 10, 20, 30, 50, 70, 100, 150, 200, 250, 300]
-DEFAULT_SEEDS = list(range(1, 11))
 OUTPUT_DIR = Path("data/lzs_scan")
 
 
@@ -153,11 +155,12 @@ def _worker_init(threads_per_worker: int):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-def run_single_seed(tau: float, seed: int) -> dict:
-    """Optimize the LZS schedule for one (tau, seed) pair and propagate it."""
+def run_single_tau(tau: float) -> dict:
+    """Optimize the LZS schedule for one tau (single deterministic
+    configuration, random=False) and propagate it."""
     from scipy.sparse.linalg import expm_multiply
 
-    from src.jax_utils import JaxSchedulerModel, JaxTrainer
+    from src.sparse_grape_method import SparseGRAPEModel, SparseGRAPETrainer
 
     sector = _STATE["sector"]
     target_hamiltonian_s = _STATE["target_hamiltonian_s"]
@@ -173,7 +176,7 @@ def run_single_seed(tau: float, seed: int) -> dict:
     time = np.linspace(0, tau, time_steps)
     delta_t = time[1] - time[0]
 
-    model = JaxSchedulerModel(
+    model = SparseGRAPEModel(
         initial_state=psi_init_s,
         target_hamiltonian=target_hamiltonian_s,
         initial_hamiltonian=driver_hamiltonian_s,
@@ -182,12 +185,18 @@ def run_single_seed(tau: float, seed: int) -> dict:
         number_of_parameters=NUMBER_PARAMETERS,
         nsteps=time_steps,
         type=SCHEDULE_TYPE,
-        seed=seed,
+        seed=SEED,
         mode="annealing ansatz",
-        random=True,
+        random=False,
     )
-    trainer = JaxTrainer(
-        model, maxiter=MAXITER, tol=OPT_TOL, ftol=OPT_FTOL, gtol=OPT_GTOL, verbose=False
+    trainer = SparseGRAPETrainer(
+        model,
+        bounds=None,
+        maxiter=MAXITER,
+        tol=OPT_TOL,
+        ftol=OPT_FTOL,
+        gtol=OPT_GTOL,
+        verbose=False,
     )
     opt_results = trainer.run()
     h_driver, h_target = opt_results["h_driver"], opt_results["h_target"]
@@ -219,7 +228,6 @@ def run_single_seed(tau: float, seed: int) -> dict:
 
     return {
         "tau": tau,
-        "seed": seed,
         "time": time,
         "time_sub": time[idx_sub],
         "energy_per_time": energy_per_time,
@@ -240,31 +248,25 @@ def run_single_seed(tau: float, seed: int) -> dict:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-def _save_tau_results(tau: float, seed_results: dict, output_dir: Path):
-    """seed_results: {seed: result_dict}, all seeds sharing the same tau."""
-    seeds = sorted(seed_results.keys())
-    stacked = {
+def _save_tau_results(tau: float, result: dict, output_dir: Path):
+    """result: the single dict returned by run_single_tau for this tau."""
+    payload = {
         "tau": tau,
-        "seeds": np.array(seeds),
-        "time": seed_results[seeds[0]]["time"],
-        "time_sub": seed_results[seeds[0]]["time_sub"],
-        "energy_per_time": np.stack([seed_results[s]["energy_per_time"] for s in seeds]),
-        "magic_per_time": np.stack([seed_results[s]["magic_per_time"] for s in seeds]),
-        "entanglement_per_time": np.stack(
-            [seed_results[s]["entanglement_per_time"] for s in seeds]
-        ),
-        "final_energy": np.array([seed_results[s]["final_energy"] for s in seeds]),
-        "energy_error": np.array([seed_results[s]["energy_error"] for s in seeds]),
-        "max_magic": np.array([seed_results[s]["max_magic"] for s in seeds]),
-        "max_entanglement": np.array(
-            [seed_results[s]["max_entanglement"] for s in seeds]
-        ),
-        "success": np.array([seed_results[s]["success"] for s in seeds]),
-        "n_iterations": np.array([seed_results[s]["n_iterations"] for s in seeds]),
-        "parameters": np.stack([seed_results[s]["parameters"] for s in seeds]),
-        "h_driver": np.stack([seed_results[s]["h_driver"] for s in seeds]),
-        "h_target": np.stack([seed_results[s]["h_target"] for s in seeds]),
-        "e0_target": seed_results[seeds[0]]["e0_target"],
+        "time": result["time"],
+        "time_sub": result["time_sub"],
+        "energy_per_time": result["energy_per_time"],
+        "magic_per_time": result["magic_per_time"],
+        "entanglement_per_time": result["entanglement_per_time"],
+        "final_energy": result["final_energy"],
+        "energy_error": result["energy_error"],
+        "max_magic": result["max_magic"],
+        "max_entanglement": result["max_entanglement"],
+        "success": result["success"],
+        "n_iterations": result["n_iterations"],
+        "parameters": result["parameters"],
+        "h_driver": result["h_driver"],
+        "h_target": result["h_target"],
+        "e0_target": result["e0_target"],
         # ── metadata ────────────────────────────────────────────────────────
         "n_qubits": N_QUBITS,
         "J": J,
@@ -279,7 +281,7 @@ def _save_tau_results(tau: float, seed_results: dict, output_dir: Path):
 
     output_dir.mkdir(parents=True, exist_ok=True)
     path = output_dir / f"lzs_scan_tau{tau:07.2f}.npz"
-    np.savez(path, **stacked)
+    np.savez(path, **payload)
     return path
 
 
@@ -288,9 +290,6 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
         "--taus", type=float, nargs="+", default=DEFAULT_TAUS, help="tau values to scan"
-    )
-    parser.add_argument(
-        "--seeds", type=int, nargs="+", default=DEFAULT_SEEDS, help="seeds per tau"
     )
     parser.add_argument(
         "--workers",
@@ -311,14 +310,12 @@ def main():
 
     ctx = mp.get_context("spawn")
 
-    tasks = [(tau, seed) for tau in args.taus for seed in args.seeds]
+    tasks = list(args.taus)
     print(
-        f"Scanning {len(args.taus)} tau values x {len(args.seeds)} seeds "
-        f"= {len(tasks)} runs, on {args.workers} workers "
-        f"({args.threads_per_worker} thread(s) each)."
+        f"Scanning {len(tasks)} tau values (single deterministic run each), "
+        f"on {args.workers} workers ({args.threads_per_worker} thread(s) each)."
     )
 
-    results_by_tau = {tau: {} for tau in args.taus}
     t_start = _time.time()
 
     with ProcessPoolExecutor(
@@ -327,17 +324,14 @@ def main():
         initializer=_worker_init,
         initargs=(args.threads_per_worker,),
     ) as pool:
-        futures = {
-            pool.submit(run_single_seed, tau, seed): (tau, seed) for tau, seed in tasks
-        }
+        futures = {pool.submit(run_single_tau, tau): tau for tau in tasks}
         n_done = 0
         for future in as_completed(futures):
-            tau, seed = futures[future]
+            tau = futures[future]
             result = future.result()
-            results_by_tau[tau][seed] = result
             n_done += 1
             print(
-                f"[{n_done}/{len(tasks)}] tau={tau:<7g} seed={seed:<3d} "
+                f"[{n_done}/{len(tasks)}] tau={tau:<7g} "
                 f"final_energy={result['final_energy']:.6f} "
                 f"energy_error={result['energy_error']:.3e} "
                 f"max_magic={result['max_magic']:.4f} "
@@ -345,10 +339,8 @@ def main():
                 f"({result['elapsed_seconds']:.1f}s)"
             )
 
-            # save as soon as every seed for this tau has finished
-            if len(results_by_tau[tau]) == len(args.seeds):
-                path = _save_tau_results(tau, results_by_tau[tau], args.output_dir)
-                print(f"  -> saved {path}")
+            path = _save_tau_results(tau, result, args.output_dir)
+            print(f"  -> saved {path}")
 
     print(f"\nDone in {_time.time() - t_start:.1f}s total.")
 
