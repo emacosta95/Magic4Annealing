@@ -150,6 +150,7 @@ class SparseGRAPEModel:
         seed: int = 42,
         mode: Optional[str] = "annealing ansatz",
         random: bool = False,
+        bounds_opt: bool = False,
     ):
         """
         Parameters
@@ -193,7 +194,7 @@ class SparseGRAPEModel:
         self.number_parameters = number_of_parameters
         self.time = np.linspace(0, tf, nsteps)
         self.dt = self.time[1] - self.time[0]
-
+        self.bounds_opt = bounds_opt
         dim = number_of_parameters
         t = self.time
 
@@ -228,7 +229,10 @@ class SparseGRAPEModel:
         self.parameters = np.zeros(n_params)
         if random:
             rng = np.random.default_rng(seed)
-            self.parameters = rng.uniform(-0.5, 0.5, size=n_params)
+            if self.bounds_opt:
+                self.parameters = rng.uniform(0.0, 1.0, size=n_params)
+            else:
+                self.parameters = rng.uniform(-0.5, 0.5, size=n_params)
 
         # ── basis functions ───────────────────────────────────────────────────
         # Precompute the (fixed, parameter-independent) time-series basis
@@ -457,8 +461,12 @@ class SparseGRAPEModel:
             # softplus(raw_durations) > 0 guarantees positive durations;
             # dividing by their sum and multiplying by tf renormalizes them
             # to add up to exactly the total annealing time.
-            D = _softplus(raw_durations)
-            sig_D = _sigmoid(raw_durations)  # dD/d(raw_durations)
+            if self.bounds_opt:
+                D = raw_durations
+                sig_D = np.array([1.0] * len(D))
+            else:
+                D = _softplus(raw_durations)
+                sig_D = _sigmoid(raw_durations)  # dD/d(raw_durations)
             Ssum = D.sum()
             scaled_durations = D / Ssum * tf
             t_bounds = np.concatenate(([0.0], np.cumsum(scaled_durations)))
@@ -480,8 +488,12 @@ class SparseGRAPEModel:
             # assemble the full waypoint list s_way = [0, plateau_1, ...,
             # plateau_M, 1] (M+2 entries: the boundary values 0 and 1 are
             # NOT free parameters).
-            sig_S = _sigmoid(raw_splateaus)
-            dsig_S = sig_S * (1.0 - sig_S)  # d(sigmoid)/d(raw_splateaus)
+            if self.bounds_opt:
+                sig_S = raw_splateaus
+                dsig_S = np.array([1.0] * len(sig_S))
+            else:
+                sig_S = _sigmoid(raw_splateaus)
+                dsig_S = sig_S * (1.0 - sig_S)  # d(sigmoid)/d(raw_splateaus)
             s_way = np.concatenate(([0.0], sig_S, [1.0]))  # (M+2,)
 
             # Step 4 — walk through the 2M+1 alternating ramp/plateau
@@ -834,19 +846,37 @@ class SparseGRAPETrainer:
             print(f"  Relative error    : {abs(fd - g0[0]) / (abs(fd) + 1e-15):.3e}")
         # reset state after gradient check
         self.model.forward_and_gradient(p0)
-
-        res = minimize(
-            self.model.forward_and_gradient,
-            self.model.parameters,
-            jac=True,  # forward_and_gradient returns (f, grad) together
-            method="L-BFGS-B",
-            callback=self.model.callback if self.verbose else None,
-            options={
-                "maxiter": self.maxiter,
-                "ftol": self.ftol,
-                "gtol": self.gtol,
-            },
-        )
+        if self.model.bounds_opt:
+            dim = self.model.number_parameters
+            M = dim
+            n_seg = 2 * dim + 1
+            bounds = [[0, float("+inf")]] * n_seg + [[0, 1]] * M
+            res = minimize(
+                self.model.forward_and_gradient,
+                self.model.parameters,
+                jac=True,  # forward_and_gradient returns (f, grad) together
+                method="L-BFGS-B",
+                bounds=bounds,
+                callback=self.model.callback if self.verbose else None,
+                options={
+                    "maxiter": self.maxiter,
+                    "ftol": self.ftol,
+                    "gtol": self.gtol,
+                },
+            )
+        else:
+            res = minimize(
+                self.model.forward_and_gradient,
+                self.model.parameters,
+                jac=True,  # forward_and_gradient returns (f, grad) together
+                method="L-BFGS-B",
+                callback=self.model.callback if self.verbose else None,
+                options={
+                    "maxiter": self.maxiter,
+                    "ftol": self.ftol,
+                    "gtol": self.gtol,
+                },
+            )
 
         # sync final state
         self.model.forward_and_gradient(res.x)
