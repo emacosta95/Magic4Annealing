@@ -67,7 +67,7 @@ number_parameters = 2  # M=2 plateaus/arms -> n_params = 3*M+1 = 7, matching
 type = "LZS"
 
 best_result = None
-for i in range(100):
+for i in range(50):
     model_i = SparseGRAPEModel(
         initial_state=psi_init_s,
         target_hamiltonian=target_hamiltonian_s,
@@ -84,7 +84,7 @@ for i in range(100):
     trainer = SparseGRAPETrainer(model_i, verbose=True)
     result = trainer.run()
     if best_result is None or result["energy"] < best_result["energy"]:
-        opt_results = result
+        best_result = result
         model = model_i
 
 h_driver, h_target = model.get_driving()
