@@ -35,7 +35,7 @@ def load_data(archivo_salida):
     return resultado
 
 
-tag = ""  # "_NoGrad", "_step_test", "_bounded", "_no_random" or ""
+tag = "_no_random"  # "_NoGrad", "_step_test", "_bounded", "_no_random" or ""
 
 data_linear = load_data("../../generated/FrustatedRing/QuantumResourcesvsT_linear.npz")
 data_LZR = load_data(
@@ -251,7 +251,7 @@ N_linear = len(Tlist_linear)
 N_LZR = len(Tlist_LZR)
 
 Tlist_linear_reduced = [Tlist_linear[i] for i in range(0, N_linear, 20)]
-Tlist_LZR_reduced = [Tlist_LZR[i] + 11 for i in range(0, N_LZR - 1, 20)]
+Tlist_LZR_reduced = [Tlist_LZR[i] + 19 for i in range(0, N_LZR - 1, 20)]
 
 
 sequence_linear = list(range(len(Tlist_linear_reduced)))
