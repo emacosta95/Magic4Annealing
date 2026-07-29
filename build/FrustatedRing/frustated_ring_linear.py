@@ -17,7 +17,7 @@ start = time.perf_counter()
 
 T = int(sys.argv[1])
 
-N = 7  # odd; N=9,11,13 feasible for full 2^N exact diagonalization
+N = int(sys.argv[2])  # odd; N=9,11,13 feasible for full 2^N exact diagonalization
 J, JL, JR = 1.0, 0.5, 0.45
 
 jij, hz = frustrated_ring_jij_hz(N, J, JL, JR)
@@ -127,7 +127,7 @@ time_sub = times[::stride]
 T_str = str(T)
 
 nombre_archivo = (
-    f"../../generated/FrustatedRing/QuantumResourcesvsT_T={T_str}_linear.npz"
+    f"../../generated/FrustatedRing/QuantumResourcesvsT_N={N}_T={T_str}_linear.npz"
 )
 
 np.savez(

@@ -35,11 +35,14 @@ def load_data(archivo_salida):
     return resultado
 
 
-tag = "_no_random"  # "_NoGrad", "_step_test", "_bounded", "_no_random" or ""
+tag = "_bounded"  # "_NoGrad", "_step_test", "_bounded", "_no_random" or ""
+N = 7
 
-data_linear = load_data("../../generated/FrustatedRing/QuantumResourcesvsT_linear.npz")
+data_linear = load_data(
+    f"../../generated/FrustatedRing/QuantumResourcesvsT_N={N}_linear.npz"
+)
 data_LZR = load_data(
-    "../../generated/FrustatedRing/QuantumResourcesvsT_LZR" + tag + ".npz"
+    f"../../generated/FrustatedRing/QuantumResourcesvsT_N={N}_LZR" + tag + ".npz"
 )
 
 Tlist_linear = sorted(data_linear.keys())
@@ -286,7 +289,7 @@ path = "/home/bsc/bsc504472/repos/Magic4Annealing/images/FrustatedRing/"
 if not os.path.exists(path):
     os.makedirs(path)
 ani.save(
-    f"{path}Probabilites_linear.gif",
+    f"{path}Probabilities_N={N}_linear.gif",
     writer="pillow",
     fps=0.3,
 )
@@ -318,7 +321,7 @@ path = "/home/bsc/bsc504472/repos/Magic4Annealing/images/FrustatedRing/"
 if not os.path.exists(path):
     os.makedirs(path)
 ani.save(
-    f"{path}Probabilites_LZR" + tag + ".gif",
+    f"{path}Probabilities_N={N}_LZR" + tag + ".gif",
     writer="pillow",
     fps=0.3,
 )
@@ -351,7 +354,7 @@ path = "/home/bsc/bsc504472/repos/Magic4Annealing/images/FrustatedRing/"
 if not os.path.exists(path):
     os.makedirs(path)
 ani.save(
-    f"{path}Schedule_linear.gif",
+    f"{path}Schedule_N={N}_linear.gif",
     writer="pillow",
     fps=0.3,
 )
@@ -384,7 +387,7 @@ path = "/home/bsc/bsc504472/repos/Magic4Annealing/images/FrustatedRing/"
 if not os.path.exists(path):
     os.makedirs(path)
 ani.save(
-    f"{path}Schedule_LZR" + tag + ".gif",
+    f"{path}Schedule_N={N}_LZR" + tag + ".gif",
     writer="pillow",
     fps=0.3,
 )
@@ -426,7 +429,7 @@ path = "/home/bsc/bsc504472/repos/Magic4Annealing/images/FrustatedRing/"
 if not os.path.exists(path):
     os.makedirs(path)
 ani.save(
-    f"{path}Energies_linear.gif",
+    f"{path}Energies_N={N}_linear.gif",
     writer="pillow",
     fps=0.3,
 )
@@ -468,7 +471,7 @@ path = "/home/bsc/bsc504472/repos/Magic4Annealing/images/FrustatedRing/"
 if not os.path.exists(path):
     os.makedirs(path)
 ani.save(
-    f"{path}Energies_LZR" + tag + ".gif",
+    f"{path}Energies_N={N}_LZR" + tag + ".gif",
     writer="pillow",
     fps=0.3,
 )
