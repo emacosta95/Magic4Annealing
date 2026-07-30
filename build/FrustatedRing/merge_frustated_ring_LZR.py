@@ -26,7 +26,7 @@ except ValueError:
 print(f"Rango esperado: T_MIN={T_MIN}, T_MAX={T_MAX}, STEP={STEP}")
 
 # regex para extraer el T_str del nombre de archivo
-patron_regex = re.compile(r"QuantumResourcesvsT_N={N}_T=([\d.]+)\_LZR.npz$")
+patron_regex = re.compile(rf"QuantumResourcesvsT_N={N}_T=([\d.]+)\_LZR.npz$")
 
 archivos = sorted(
     glob.glob(patron_archivo), key=lambda f: int(patron_regex.search(f).group(1))
