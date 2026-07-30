@@ -9,12 +9,13 @@ from src.annealing_utils import (
 from src.hamiltonian_utils import frustrated_ring_jij_hz
 from src.sparse_grape_method import SparseGRAPEModel, SparseGRAPETrainer
 from src.utils import Z2SymmetricSector
+import sys
 
 start = time.perf_counter()
 
-T = 120
+T = int(sys.argv[1])  # total annealing time, in units of 1/J
 
-N = 7  # odd; N=9,11,13 feasible for full 2^N exact diagonalization
+N = int(sys.argv[2])  # odd; N=9,11,13 feasible for full 2^N exact diagonalization
 J, JL, JR = 1.0, 0.5, 0.45
 
 jij, hz = frustrated_ring_jij_hz(N, J, JL, JR)
@@ -75,6 +76,7 @@ for i in seed_list:
         type=type,
         seed=i,
         random=True,
+        bounds_opt=True,
     )
 
     trainer = SparseGRAPETrainer(model_i, verbose=True)

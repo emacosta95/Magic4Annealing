@@ -241,7 +241,7 @@ plt.plot(
     markersize=4.5,
     label="LZR schedule",
 )
-plt.ylim(-4.6, -4.45)
+plt.ylim(-6.6, -6.45)
 plt.xlabel("T")
 plt.ylabel("Energy at final time")
 plt.legend()
