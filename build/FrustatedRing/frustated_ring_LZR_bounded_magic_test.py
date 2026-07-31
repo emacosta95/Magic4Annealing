@@ -100,7 +100,7 @@ probabilities = np.zeros((time_steps, nlevels))
 psi_history_s = np.zeros((time_steps, dim_s), dtype=complex)
 eigenstates_history_s = np.zeros((time_steps, dim_s, nlevels), dtype=complex)
 
-sre = SREJax(n_qubits=nqubits - 1, batch_size=1000)
+sre = SREJax(n_qubits=nqubits, batch_size=1000)
 entanglement_entropy = EntanglementEntropy(nqubits=nqubits, n_A=nqubits // 2)
 
 
