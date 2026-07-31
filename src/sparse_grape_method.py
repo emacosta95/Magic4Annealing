@@ -508,7 +508,14 @@ class SparseGRAPEModel:
             for seg in range(n_seg):
                 t0, t1 = t_bounds[seg], t_bounds[seg + 1]
                 dt0, dt1 = dTb[seg, :], dTb[seg + 1, :]  # (n_seg,) each
-                mask = (t >= t0) & (t <= t1)  # heaviside condition
+                # heaviside condition
+                if seg < n_seg - 1:
+                    mask = (t >= t0) & (t < t1)
+                else:
+                    mask = (t >= t0) & (
+                        t <= t1
+                    )  # last segment stays closed to include t=tf
+
                 tm = t[mask]
                 denom = (t1 - t0) if t1 > t0 else 1.0
 
@@ -687,11 +694,10 @@ class SparseGRAPEModel:
 
         for i in reversed(range(self.nsteps)):
             H_t = h_driver[i] * self._H_driver + h_target[i] * self._H_target
+            psi_i = psi_fwd[i]
 
             # propagate co-state one step backward (adjoint = +1j for Hermitian H)
             chi = expm_multiply(+1j * dt * H_t, chi)
-
-            psi_i = psi_fwd[i]
 
             # GRAPE: dE/dh_x_i = -2 dt Im[ ⟨ψ_i | H_x | χ_i⟩ ]
             # This is the standard GRAPE per-timestep gradient formula: the
@@ -800,6 +806,7 @@ class SparseGRAPETrainer:
         model : SparseGRAPEModel
             The model to optimize (mutated in place — run() leaves
             model.parameters/psi/history_* at the optimizer's final state).
+        bounds: range of values for each parameter in the optimization.
         maxiter, ftol, gtol : passed straight through to scipy's L-BFGS-B
             (see scipy.optimize.minimize options for exact semantics).
         tol : float
