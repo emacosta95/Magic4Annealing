@@ -133,7 +133,7 @@ def plot_landscape(A, B, E, coords, energies, title="Energy landscape", save_pat
         figsize=(ancho_heatmap + 1, alto_total)
     )  # +1 por la colorbar
 
-    cont = ax.contourf(A, B, E, levels=50, cmap="terrain")
+    cont = ax.contourf(A, B, E, levels=100, cmap="terrain")
 
     # colorbar con tamaño fijo relativo al heatmap, no a toda la figura
     divider = make_axes_locatable(ax)
@@ -349,7 +349,7 @@ type = "LZS"
 
 filename = f"../../generated/FrustatedRing/ParametersLZR_T={T}_N={N}.npz"
 data = np.load(filename)
-chosen_seeds = [2, 3, 16]
+chosen_seeds = [7,8,9]
 
 theta1 = data["theta_list"][chosen_seeds[0]]
 theta2 = data["theta_list"][chosen_seeds[1]]
