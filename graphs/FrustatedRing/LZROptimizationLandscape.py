@@ -133,7 +133,7 @@ def plot_landscape(A, B, E, coords, energies, title="Energy landscape", save_pat
         figsize=(ancho_heatmap + 1, alto_total)
     )  # +1 por la colorbar
 
-    cont = ax.contourf(A, B, E, levels=50, cmap="viridis")
+    cont = ax.contourf(A, B, E, levels=50, cmap="terrain")
 
     # colorbar con tamaño fijo relativo al heatmap, no a toda la figura
     divider = make_axes_locatable(ax)
@@ -200,35 +200,35 @@ def build_schedule(theta, t):
     raw_durations = parameters[:n_seg]
     raw_splateaus = parameters[n_seg : n_seg + M]
 
-    # Step 1 — decode segment durations.
-    # softplus(raw_durations) > 0 guarantees positive durations;
-    # dividing by their sum and multiplying by tf renormalizes them
-    # to add up to exactly the total annealing time.
-    # ── softplus and its derivative ───────────────────────────────────────────────
-    def _softplus(x: np.ndarray) -> np.ndarray:
-        """
-        log(1 + exp(x)), numerically stable.
+    # # Step 1 — decode segment durations.
+    # # softplus(raw_durations) > 0 guarantees positive durations;
+    # # dividing by their sum and multiplying by tf renormalizes them
+    # # to add up to exactly the total annealing time.
+    # # ── softplus and its derivative ───────────────────────────────────────────────
+    # def _softplus(x: np.ndarray) -> np.ndarray:
+    #     """
+    #     log(1 + exp(x)), numerically stable.
 
-        Used to map an unconstrained real parameter onto a strictly-positive
-        number (e.g. a segment duration, which must be > 0). Computed as
-        log1p(exp(-|x|)) + max(x, 0) instead of the naive log(1+exp(x)) to
-        avoid overflow for large x.
-        """
-        return np.log1p(np.exp(-np.abs(x))) + np.maximum(x, 0)
+    #     Used to map an unconstrained real parameter onto a strictly-positive
+    #     number (e.g. a segment duration, which must be > 0). Computed as
+    #     log1p(exp(-|x|)) + max(x, 0) instead of the naive log(1+exp(x)) to
+    #     avoid overflow for large x.
+    #     """
+    #     return np.log1p(np.exp(-np.abs(x))) + np.maximum(x, 0)
 
-    def _sigmoid(x: np.ndarray) -> np.ndarray:
-        """
-        Derivative of softplus = sigmoid(x) = 1 / (1 + exp(-x)).
+    # def _sigmoid(x: np.ndarray) -> np.ndarray:
+    #     """
+    #     Derivative of softplus = sigmoid(x) = 1 / (1 + exp(-x)).
 
-        Two independent uses in this file:
-        1. As d(softplus)/dx, needed by the chain rule wherever a
-            softplus-mapped parameter (e.g. a raw duration) is differentiated.
-        2. As a standalone squashing function 0->1, used to map the raw
-            LZS plateau-height parameters into the physical range s in [0, 1].
-        """
-        return 1.0 / (1.0 + np.exp(-x))
+    #     Two independent uses in this file:
+    #     1. As d(softplus)/dx, needed by the chain rule wherever a
+    #         softplus-mapped parameter (e.g. a raw duration) is differentiated.
+    #     2. As a standalone squashing function 0->1, used to map the raw
+    #         LZS plateau-height parameters into the physical range s in [0, 1].
+    #     """
+    #     return 1.0 / (1.0 + np.exp(-x))
 
-    D = _softplus(raw_durations)
+    D = raw_durations
     Ssum = D.sum()
     scaled_durations = D / Ssum * tf
     t_bounds = np.concatenate(([0.0], np.cumsum(scaled_durations)))
@@ -238,7 +238,7 @@ def build_schedule(theta, t):
     # assemble the full waypoint list s_way = [0, plateau_1, ...,
     # plateau_M, 1] (M+2 entries: the boundary values 0 and 1 are
     # NOT free parameters).
-    sig_S = _sigmoid(raw_splateaus)
+    sig_S = raw_splateaus
     s_way = np.concatenate(([0.0], sig_S, [1.0]))  # (M+2,)
 
     # Step 4 — walk through the 2M+1 alternating ramp/plateau
@@ -349,7 +349,7 @@ type = "LZS"
 
 filename = f"../../generated/FrustatedRing/ParametersLZR_T={T}_N={N}.npz"
 data = np.load(filename)
-chosen_seeds = [6, 8, 14]
+chosen_seeds = [2, 3, 16]
 
 theta1 = data["theta_list"][chosen_seeds[0]]
 theta2 = data["theta_list"][chosen_seeds[1]]
