@@ -187,6 +187,12 @@ class SparseGRAPEModel:
         random : bool
             If True, initialize parameters ~ Uniform(-0.5, 0.5) instead of
             all-zeros.
+        bounds_opt : bool
+            If True, the raw LZS segment durations and plateau heights are treated as leaf nodes
+            (independent parameters) and not softplus/sigmoid-mapped.
+            This is connected with the boundaries of the optimization ([0,infty] for the durations,
+             [0,1] for the plateau heights) and is useful for the SparseGRAPETrainer, which is specifically dependent on the self.model.bounds_opt.
+            This condition makes sense only for the LSZ ansatz though.
         """
         self.tf = tf
         self.nsteps = nsteps
@@ -461,6 +467,12 @@ class SparseGRAPEModel:
             # softplus(raw_durations) > 0 guarantees positive durations;
             # dividing by their sum and multiplying by tf renormalizes them
             # to add up to exactly the total annealing time.
+
+            # with the bounds_opt flag, the raw_durations
+            # are treated as leaf nodes and don't need to be softplus-ed.
+            # This is useful for the SparseGRAPETrainer,
+            # which is specifically dependent on the self.model.bounds_opt.
+            #  This condition makes sense only for the LSZ ansatz though.
             if self.bounds_opt:
                 D = raw_durations
                 sig_D = np.array([1.0] * len(D))
@@ -853,6 +865,9 @@ class SparseGRAPETrainer:
             print(f"  Relative error    : {abs(fd - g0[0]) / (abs(fd) + 1e-15):.3e}")
         # reset state after gradient check
         self.model.forward_and_gradient(p0)
+        # this condition makes the SparseGRAPETrainer specifically
+        # dependent on the self.model.bounds_opt. This condition makes sense
+        # only for the LSZ ansatz though.
         if self.model.bounds_opt:
             dim = self.model.number_parameters
             M = dim
