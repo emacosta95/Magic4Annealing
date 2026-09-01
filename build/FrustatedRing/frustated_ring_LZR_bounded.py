@@ -87,6 +87,7 @@ for i in range(50):
     if best_result is None or result["energy"] < best_result["energy"]:
         best_result = result
         model = model_i
+        best_seed = i
 
 h_driver, h_target = model.get_driving()
 schedule = h_target
@@ -155,7 +156,8 @@ nombre_archivo = (
 
 np.savez(
     nombre_archivo,
-    T=np.array([T]),  # guardamos T explícitamente también, por seguridad
+    T=np.array([T]),     # guardamos T explícitamente también, por seguridad
+    seed=np.array([best_seed]),
     times=times,
     evo_energy=energy,
     e0=e0,
