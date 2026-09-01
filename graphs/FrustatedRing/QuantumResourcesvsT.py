@@ -36,7 +36,7 @@ def load_data(archivo_salida):
 
 
 tag = "_bounded"  # "_NoGrad", "_step_test", "_bounded", "_no_random" or ""
-tag_T = "_more_T"  # "_more_T" or ""
+tag_T = ""  # "_more_T" or ""
 N = 7
 
 data_linear = load_data(
@@ -257,7 +257,7 @@ N_linear = len(Tlist_linear)
 N_LZR = len(Tlist_LZR)
 
 Tlist_linear_reduced = [Tlist_linear[i] for i in range(0, N_linear, 20)]
-Tlist_LZR_reduced = [Tlist_LZR[i] + 19 for i in range(0, N_LZR - 1, 20)]
+Tlist_LZR_reduced = [Tlist_LZR[i] for i in range(0, N_LZR, 20)]
 
 
 sequence_linear = list(range(len(Tlist_linear_reduced)))
@@ -478,3 +478,92 @@ ani.save(
     writer="pillow",
     fps=0.3,
 )
+
+
+def animate_entanglement(i):
+    ax_gif.clear()
+
+    idx = sequence_LZR[i]
+    T = Tlist_LZR_reduced[idx]
+
+    times_linear = data_linear[T]["time_sub"]
+    times_LZR = data_LZR[T]["time_sub"]
+    magic_linear = data_linear[T]["entanglement"]
+    magic_linear_gs = data_linear[T]["entanglement_gs_level"]
+    magic_LZR = data_LZR[T]["entanglement"]
+
+    ax_gif.plot(
+        times_linear, magic_linear, "-", linewidth=1.5, markersize=4.5, label="Linear"
+    )
+    ax_gif.plot(
+        times_linear,
+        magic_linear_gs,
+        "-",
+        linewidth=1.5,
+        markersize=4.5,
+        label="Linear (ground state level)",
+    )
+    ax_gif.plot(times_LZR, magic_LZR, "-", linewidth=1.5, markersize=4.5, label="LZR")
+    ax_gif.set_title(f"Entanglement (T = {T})")
+    ax_gif.set_xlabel(r"$t$")
+    ax_gif.set_ylabel("Entanglement")
+    ax_gif.legend()
+    ax_gif.grid()
+
+
+ani = animation.FuncAnimation(
+    fig_gif, animate_entanglement, frames=len(sequence_LZR), interval=1200
+)
+path = "/home/bsc/bsc504472/repos/Magic4Annealing/images/FrustatedRing/"
+if not os.path.exists(path):
+    os.makedirs(path)
+ani.save(
+    f"{path}Entanglement_N={N}_LZR" + tag + tag_T + ".gif",
+    writer="pillow",
+    fps=0.3,
+)
+
+
+def animate_magic(i):
+    ax_gif.clear()
+
+    idx = sequence_LZR[i]
+    T = Tlist_LZR_reduced[idx]
+
+    times_linear = data_linear[T]["time_sub"]
+    magic_linear = data_linear[T]["magic"]
+    magic_linear_gs = data_linear[T]["magic_gs_level"]
+    times_LZR = data_LZR[T]["time_sub"]
+    magic_LZR = data_LZR[T]["magic"]
+
+    ax_gif.plot(
+        times_linear, magic_linear, "-", linewidth=1.5, markersize=4.5, label="Linear"
+    )
+    ax_gif.plot(
+        times_linear,
+        magic_linear_gs,
+        "-",
+        linewidth=1.5,
+        markersize=4.5,
+        label="Linear (ground state level)",
+    )
+    ax_gif.plot(times_LZR, magic_LZR, "-", linewidth=1.5, markersize=4.5, label="LZR")
+    ax_gif.set_title(f"Magic (T = {T})")
+    ax_gif.set_xlabel(r"$t$")
+    ax_gif.set_ylabel("Magic")
+    ax_gif.legend()
+    ax_gif.grid()
+
+
+ani = animation.FuncAnimation(
+    fig_gif, animate_magic, frames=len(sequence_LZR), interval=1200
+)
+path = "/home/bsc/bsc504472/repos/Magic4Annealing/images/FrustatedRing/"
+if not os.path.exists(path):
+    os.makedirs(path)
+ani.save(
+    f"{path}Magic_N={N}_LZR" + tag + tag_T + ".gif",
+    writer="pillow",
+    fps=0.3,
+)
+
