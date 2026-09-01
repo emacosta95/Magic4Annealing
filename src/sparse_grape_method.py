@@ -93,7 +93,7 @@ interface as JaxSchedulerModel/JaxTrainer (see "Usage" above).
 import numpy as np
 import scipy.sparse as sp
 from scipy.sparse.linalg import expm_multiply
-from scipy.optimize import minimize
+from scipy.optimize import minimize, dual_annealing
 from typing import Optional
 
 
@@ -887,6 +887,97 @@ class SparseGRAPETrainer:
 
         # sync final state
         self.model.forward_and_gradient(res.x)
+        h_driver, h_target = self.model.get_driving()
+
+        if self.verbose:
+            print(f"\nOptimization success : {res.success}")
+            print(f"Final energy         : {res.fun:.6f}")
+            print(f"Message              : {res.message}")
+
+        return {
+            "success": bool(res.success),
+            "message": res.message,
+            "n_iterations": int(res.nit),
+            "n_evals": int(res.nfev),
+            "energy": float(res.fun),
+            "parameters": np.array(res.x),
+            "psi": self.model.psi.copy(),
+            "h_driver": h_driver,
+            "h_target": h_target,
+            "time": self.model.time.copy(),
+            "history_energy": list(self.model.history),
+            "history_parameters": [p.copy() for p in self.model.history_parameters],
+            "history_drivings": self.model.history_drivings,
+            "history_psi": [p.copy() for p in self.model.history_psi],
+        }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+class SimulatedAnnealingTrainer:
+    """
+    Drop-in replacement for JaxTrainer.
+    """
+
+    def __init__(
+        self,
+        model: SparseGRAPEModel,
+        seed: int = 2,
+        maxiter: int = 500,
+        tol: float = 1e-3,
+        verbose: bool = True,
+    ):
+        """
+        Parameters
+        ----------
+        model : SparseGRAPEModel
+            The model to optimize (mutated in place — run() leaves
+            model.parameters/psi/history_* at the optimizer's final state).
+        bounds: range of values for each parameter in the optimization.
+        maxiter, ftol: passed straight through to scipy's dual_annealing
+            (see scipy.optimize.dual_annealing options for exact semantics).
+        tol : float
+            Currently unused by run() (L-BFGS-B is configured via ftol/gtol
+            instead) — kept for interface parity with JaxTrainer.
+        verbose : bool
+            If True, prints progress every accepted iteration (via
+            model.callback) and runs the finite-difference gradient check
+            described in run().
+        """
+        self.model = model
+        self.maxiter = maxiter
+        self.verbose = verbose
+        self.seed = seed
+
+    def run(self) -> dict:
+        """
+        Run Simulated Annealing.
+        Returns dict with identical keys to JaxTrainer.run().
+        """
+
+        if self.model.bounds_opt:
+            dim = self.model.number_parameters
+            M = dim
+            n_seg = 2 * dim + 1
+            bounds = [[0, float("+inf")]] * n_seg + [[0, 1]] * M
+            res = dual_annealing(
+                self.model.forward,
+                x0=self.model.parameters,
+                bounds=bounds,
+                callback=self.model.callback if self.verbose else None,
+                maxiter=self.maxiter,
+                seed=self.seed,
+            )
+        else:
+            res = dual_annealing(
+                self.model.forward,
+                x0=self.model.parameters,
+                callback=self.model.callback if self.verbose else None,
+                maxiter=self.maxiter,
+                seed=self.seed,
+            )
+
+        # sync final state
+        self.model.forward(res.x)
         h_driver, h_target = self.model.get_driving()
 
         if self.verbose:
