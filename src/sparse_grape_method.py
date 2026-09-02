@@ -958,7 +958,7 @@ class SimulatedAnnealingTrainer:
             dim = self.model.number_parameters
             M = dim
             n_seg = 2 * dim + 1
-            bounds = [[0, float("+inf")]] * n_seg + [[0, 1]] * M
+            bounds = [[0, 1]] * n_seg + [[0, 1]] * M
             res = dual_annealing(
                 self.model.forward,
                 x0=self.model.parameters,
