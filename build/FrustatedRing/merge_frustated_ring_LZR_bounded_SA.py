@@ -19,7 +19,7 @@ archivo_salida = os.path.join(
 # con valores por defecto por si se ejecuta manualmente sin pasarlas
 try:
     T_MIN = int(os.environ.get("T_MIN", 1))
-    T_MAX = int(os.environ.get("T_MAX", 200))
+    T_MAX = int(os.environ.get("T_MAX", 115))
     STEP = int(os.environ.get("STEP", 1))
 except ValueError:
     raise RuntimeError(
