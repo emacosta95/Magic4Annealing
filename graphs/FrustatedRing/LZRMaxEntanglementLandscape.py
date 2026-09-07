@@ -198,7 +198,7 @@ resolution = 50
 
 filename = f"../../generated/FrustatedRing/ParametersLZR_T={T}_N={N}.npz"
 data = np.load(filename)
-seed_combinations = np.array(list(combinations(range(1, 21), 3)))
+seed_combinations = np.array(list(combinations(range(20), 3)))
 chosen_seeds = seed_combinations[int(sys.argv[3])]
 
 theta1 = data["theta_list"][chosen_seeds[0]]
