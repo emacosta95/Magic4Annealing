@@ -211,7 +211,7 @@ A, B, max_entanglement, coords = max_entanglement_landscape(
     theta1, theta2, theta3, max_entanglement_fn_wrapper, resolution=resolution
 )
 
-path = "../../images/FrustatedRing/MaxEntanglementLandscapeLZR_T={T}_N={N}"
+path = f"../../images/FrustatedRing/MaxEntanglementLandscapeLZR_T={T}_N={N}"
 if not os.path.exists(path):
     os.makedirs(path)
 

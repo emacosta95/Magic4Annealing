@@ -195,7 +195,7 @@ A, B, E, coords = energy_landscape(
     theta1, theta2, theta3, energy_fn_wrapper, resolution=resolution
 )
 
-path = "../../images/FrustatedRing/FinalEnergyLandscapeLZR_T={T}_N={N}"
+path = f"../../images/FrustatedRing/FinalEnergyLandscapeLZR_T={T}_N={N}"
 if not os.path.exists(path):
     os.makedirs(path)
 

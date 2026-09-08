@@ -211,7 +211,7 @@ A, B, max_magic, coords = max_magic_landscape(
     theta1, theta2, theta3, max_magic_fn_wrapper, resolution=resolution
 )
 
-path = "../../images/FrustatedRing/MaxMagicLandscapeLZR_T={T}_N={N}"
+path = f"../../images/FrustatedRing/MaxMagicLandscapeLZR_T={T}_N={N}"
 if not os.path.exists(path):
     os.makedirs(path)
 
