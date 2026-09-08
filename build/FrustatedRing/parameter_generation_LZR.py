@@ -62,7 +62,7 @@ number_parameters = 2  # M=2 plateaus/arms -> n_params = 3*M+1 = 7, matching
 # Werner et al.'s reduction from Cote et al.'s ~100-parameter
 # variational schedule down to 7 parameters
 type = "LZS"
-seed_list = list(range(20))
+seed_list = list(range(10))
 theta_list = []
 for i in seed_list:
     model_i = SparseGRAPEModel(
