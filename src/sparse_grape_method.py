@@ -953,11 +953,10 @@ class SimulatedAnnealingTrainer:
         Run Simulated Annealing.
         Returns dict with identical keys to JaxTrainer.run().
         """
-
+        dim = self.model.number_parameters
+        M = dim
+        n_seg = 2 * dim + 1
         if self.model.bounds_opt:
-            dim = self.model.number_parameters
-            M = dim
-            n_seg = 2 * dim + 1
             bounds = [[0, 1]] * n_seg + [[0, 1]] * M
             res = dual_annealing(
                 self.model.forward,
@@ -968,9 +967,11 @@ class SimulatedAnnealingTrainer:
                 seed=self.seed,
             )
         else:
+            bounds = [[-8, 8]] * (n_seg + M)
             res = dual_annealing(
                 self.model.forward,
                 x0=self.model.parameters,
+                bounds=bounds,
                 callback=self.model.callback if self.verbose else None,
                 maxiter=self.maxiter,
                 seed=self.seed,
