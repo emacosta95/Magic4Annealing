@@ -85,14 +85,16 @@ for i in range(50):
     trainer = SparseGRAPETrainer(model_i, verbose=True)
     result = trainer.run()
     if best_result is None or result["energy"] < best_result["energy"]:
-        best_result = result
-        model = model_i
+            best_result = result
+            model = model_i
+            best_seed = i
 
 h_driver, h_target = model.get_driving()
 schedule = h_target
 
 dim_s = driver_hamiltonian_s.shape[0]
 psi = psi_init_s.copy()
+theta = best_result["parameters"]
 
 spectrum = np.zeros((time_steps, nlevels))
 energy = np.zeros(time_steps)
@@ -154,6 +156,8 @@ nombre_archivo = f"../../generated/FrustatedRing/QuantumResourcesvsT_N={N}_T={T_
 np.savez(
     nombre_archivo,
     T=np.array([T]),  # guardamos T explícitamente también, por seguridad
+    seed=np.array([best_seed]),
+    theta=np.array([theta]),
     times=times,
     evo_energy=energy,
     e0=e0,

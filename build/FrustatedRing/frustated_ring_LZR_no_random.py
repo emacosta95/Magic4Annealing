@@ -89,7 +89,7 @@ schedule = h_target
 
 dim_s = driver_hamiltonian_s.shape[0]
 psi = psi_init_s.copy()
-
+theta = result["parameters"]
 spectrum = np.zeros((time_steps, nlevels))
 energy = np.zeros(time_steps)
 probabilities = np.zeros((time_steps, nlevels))
@@ -150,6 +150,7 @@ nombre_archivo = f"../../generated/FrustatedRing/QuantumResourcesvsT_N={N}_T={T_
 np.savez(
     nombre_archivo,
     T=np.array([T]),  # guardamos T explícitamente también, por seguridad
+    theta=np.array([theta]),
     times=times,
     evo_energy=energy,
     e0=e0,

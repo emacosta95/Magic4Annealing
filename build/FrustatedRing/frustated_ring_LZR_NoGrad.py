@@ -86,7 +86,7 @@ schedule = h_target
 
 dim_s = driver_hamiltonian_s.shape[0]
 psi = psi_init_s.copy()
-
+theta = opt_results["parameters"]
 spectrum = np.zeros((time_steps, nlevels))
 energy = np.zeros(time_steps)
 probabilities = np.zeros((time_steps, nlevels))
@@ -149,6 +149,7 @@ nombre_archivo = (
 np.savez(
     nombre_archivo,
     T=np.array([T]),  # guardamos T explícitamente también, por seguridad
+    theta=np.array([theta]),
     times=times,
     evo_energy=energy,
     e0=e0,

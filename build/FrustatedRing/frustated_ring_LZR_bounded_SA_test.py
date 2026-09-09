@@ -4,7 +4,7 @@ from src.annealing_utils import (
     get_longitudinal_hamiltonian,
     get_driver_hamiltonian,
 )
-from src.sparse_grape_method import SparseGRAPEModel, SparseGRAPETrainer
+from src.sparse_grape_method import SparseGRAPEModel, SimulatedAnnealingTrainer
 
 from src.hamiltonian_utils import frustrated_ring_jij_hz
 from src.utils import Z2SymmetricSector
@@ -16,9 +16,9 @@ import time
 
 start = time.perf_counter()
 
-T = int(sys.argv[1])
+T = 80
 
-N = int(sys.argv[2])  # odd; N=9,11,13 feasible for full 2^N exact diagonalization
+N = 7  # odd; N=9,11,13 feasible for full 2^N exact diagonalization
 J, JL, JR = 1.0, 0.5, 0.45
 
 jij, hz = frustrated_ring_jij_hz(N, J, JL, JR)
@@ -66,30 +66,33 @@ number_parameters = 2  # M=2 plateaus/arms -> n_params = 3*M+1 = 7, matching
 # variational schedule down to 7 parameters
 type = "LZS"
 
+best_result = None
+for i in range(1):
+    model_i = SparseGRAPEModel(
+        initial_state=psi_init_s,
+        target_hamiltonian=target_hamiltonian_s,
+        initial_hamiltonian=driver_hamiltonian_s,
+        reference_hamiltonian=target_hamiltonian_s,
+        tf=tau,
+        number_of_parameters=number_parameters,
+        nsteps=time_steps,
+        type=type,
+        seed=i,
+        random=True,
+    )
 
-model = SparseGRAPEModel(
-    initial_state=psi_init_s,
-    target_hamiltonian=target_hamiltonian_s,
-    initial_hamiltonian=driver_hamiltonian_s,
-    reference_hamiltonian=target_hamiltonian_s,
-    tf=tau,
-    number_of_parameters=number_parameters,
-    nsteps=time_steps,
-    type=type,
-    seed=6,
-    random=True,
-)
-
-trainer = SparseGRAPETrainer(model, verbose=True)
-result = trainer.run()
-
-
+    trainer = SimulatedAnnealingTrainer(model_i, seed=i, verbose=True)
+    result = trainer.run()
+    if best_result is None or result["energy"] < best_result["energy"]:
+        best_result = result
+        model = model_i
+        best_seed = i
 h_driver, h_target = model.get_driving()
 schedule = h_target
 
 dim_s = driver_hamiltonian_s.shape[0]
 psi = psi_init_s.copy()
-theta = result["parameters"]
+
 spectrum = np.zeros((time_steps, nlevels))
 energy = np.zeros(time_steps)
 probabilities = np.zeros((time_steps, nlevels))
@@ -145,12 +148,12 @@ time_sub = times[::stride]
 # formateo consistente de T para evitar problemas de precisión en el nombre
 T_str = str(T)
 
-nombre_archivo = f"../../generated/FrustatedRing/QuantumResourcesvsT_N={N}_T={T_str}_LZR_step_test.npz"
+nombre_archivo = f"../../generated/FrustatedRing/QuantumResourcesvsT_N={N}_T={T_str}_LZR_bounded_SA_test.npz"
 
 np.savez(
     nombre_archivo,
     T=np.array([T]),  # guardamos T explícitamente también, por seguridad
-    theta=np.array([theta]),
+    seed=np.array([best_seed]),
     times=times,
     evo_energy=energy,
     e0=e0,
