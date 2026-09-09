@@ -35,10 +35,10 @@ def load_data(archivo_salida):
     return resultado
 
 
-tag = "_bounded"  # "_NoGrad", "_step_test", "_bounded", "_no_random" or ""
+tag = "_bounded_SA"  # "_NoGrad", "_step_test", "_bounded", "_no_random" or ""
 tag_T = ""  # "_more_T" or ""
-N = 9
-
+N = 7
+nlevels = 5
 data_linear = load_data(
     f"../../generated/FrustatedRing/QuantumResourcesvsT_N={N}_linear" + tag_T + ".npz"
 )
@@ -305,10 +305,15 @@ def animate_probs_LZR(i):
     T = Tlist_LZR_reduced[idx]
 
     times = data_LZR[T]["times"]
-    p0 = data_LZR[T]["p0"]
-    p1 = data_LZR[T]["p1"]
-    ax_gif.plot(times, p0, ".-", linewidth=1, markersize=4.5, label="p0")
-    ax_gif.plot(times, p1, ".-", linewidth=1, markersize=4.5, label="p1")
+    for j in range(nlevels):
+        ax_gif.plot(
+            times,
+            data_LZR[T][f"p{j}"],
+            ".-",
+            linewidth=1,
+            markersize=4.5,
+            label=f"p{j}",
+        )
 
     ax_gif.set_title(f"Probabilities (T = {T})")
     ax_gif.set_xlabel(r"$t$")
@@ -446,11 +451,16 @@ def animate_energies_LZR(i):
 
     times = data_LZR[T]["times"]
     evo_energy = data_LZR[T]["evo_energy"]
-    e0 = data_LZR[T]["e0"]
-    e1 = data_LZR[T]["e1"]
+    for j in range(nlevels):
+        ax_gif.plot(
+            times,
+            data_LZR[T][f"e{j}"],
+            "-",
+            linewidth=1.5,
+            markersize=4.5,
+            label=f"E{j}",
+        )
 
-    ax_gif.plot(times, e0, "-", linewidth=1.5, markersize=4.5, label="E0")
-    ax_gif.plot(times, e1, "-", linewidth=1.5, markersize=4.5, label="E1")
     ax_gif.plot(
         times,
         evo_energy,
@@ -566,4 +576,3 @@ ani.save(
     writer="pillow",
     fps=0.3,
 )
-
