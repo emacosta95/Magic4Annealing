@@ -5,15 +5,12 @@ import os
 import sys
 
 N = int(sys.argv[1])  # odd; N=9,11,13 feasible for full 2^N exact diagonalization
+TAG = sys.argv[2]
 
 # --- configuración ---
 directorio = "../../generated/FrustatedRing"
-patron_archivo = os.path.join(
-    directorio, f"QuantumResourcesvsT_N={N}_T=*_LZR_no_random.npz"
-)
-archivo_salida = os.path.join(
-    directorio, f"QuantumResourcesvsT_N={N}_LZR_no_random.npz"
-)
+patron_archivo = os.path.join(directorio, f"QuantumResourcesvsT_N={N}_T=*_LZR{TAG}.npz")
+archivo_salida = os.path.join(directorio, f"QuantumResourcesvsT_N={N}_LZR{TAG}.npz")
 
 # T_MIN, T_MAX, STEP se leen de variables de entorno (definidas en submit.sh)
 # con valores por defecto por si se ejecuta manualmente sin pasarlas
@@ -28,10 +25,12 @@ except ValueError:
         f"T_MAX={os.environ.get('T_MAX')}, STEP={os.environ.get('STEP')}"
     )
 
-print(f"Rango esperado: T_MIN={T_MIN}, T_MAX={T_MAX}, STEP={STEP}")
+print(f"Rango esperado: T_MIN={T_MIN}, T_MAX={T_MAX}, STEP={STEP}, TAG='{TAG}'")
 
 # regex para extraer el T_str del nombre de archivo
-patron_regex = re.compile(rf"QuantumResourcesvsT_N={N}_T=([\d.]+)\_LZR_no_random.npz$")
+patron_regex = re.compile(
+    rf"QuantumResourcesvsT_N={N}_T=([\d.]+)_LZR{re.escape(TAG)}\.npz$"
+)
 
 archivos = sorted(
     glob.glob(patron_archivo), key=lambda f: int(patron_regex.search(f).group(1))

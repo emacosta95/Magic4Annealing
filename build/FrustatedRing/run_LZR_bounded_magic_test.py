@@ -15,7 +15,7 @@ import sys
 import time
 
 start = time.perf_counter()
-
+tag = "_bounded_magic_test"
 T = int(sys.argv[1])
 
 N = int(sys.argv[2])  # odd; N=9,11,13 feasible for full 2^N exact diagonalization
@@ -79,6 +79,7 @@ for i in range(50):
         type=type,
         seed=i,
         random=True,
+        bounds_opt=True,
     )
 
     trainer = SparseGRAPETrainer(model_i, verbose=True)
@@ -101,7 +102,7 @@ probabilities = np.zeros((time_steps, nlevels))
 psi_history_s = np.zeros((time_steps, dim_s), dtype=complex)
 eigenstates_history_s = np.zeros((time_steps, dim_s, nlevels), dtype=complex)
 
-sre = SREJax(n_qubits=nqubits - 1, batch_size=1000)
+sre = SREJax(n_qubits=nqubits, batch_size=1000)
 entanglement_entropy = EntanglementEntropy(nqubits=nqubits, n_A=nqubits // 2)
 
 
@@ -140,7 +141,7 @@ stride = max(1, 10)
 
 for i in trange(0, time_steps, stride):
     state_full = sector.lift(psi_history_s[i])
-    magic.append(sre(psi_history_s[i]))
+    magic.append(sre(state_full))
     entanglement.append(entanglement_entropy.von_neumann(state_full))
 
 
@@ -151,7 +152,7 @@ time_sub = times[::stride]
 T_str = str(T)
 
 nombre_archivo = (
-    f"../../generated/FrustatedRing/QuantumResourcesvsT_N={N}_T={T_str}_LZR.npz"
+    f"../../generated/FrustatedRing/QuantumResourcesvsT_N={N}_T={T_str}_LZR{tag}.npz"
 )
 
 np.savez(

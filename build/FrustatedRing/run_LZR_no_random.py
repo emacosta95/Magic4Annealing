@@ -15,7 +15,7 @@ import sys
 import time
 
 start = time.perf_counter()
-
+tag = "_no_random"
 T = int(sys.argv[1])
 
 N = int(sys.argv[2])  # odd; N=9,11,13 feasible for full 2^N exact diagonalization
@@ -76,8 +76,8 @@ model = SparseGRAPEModel(
     number_of_parameters=number_parameters,
     nsteps=time_steps,
     type=type,
-    seed=6,
-    random=True,
+    seed=1,
+    random=False,
 )
 
 trainer = SparseGRAPETrainer(model, verbose=True)
@@ -145,7 +145,9 @@ time_sub = times[::stride]
 # formateo consistente de T para evitar problemas de precisión en el nombre
 T_str = str(T)
 
-nombre_archivo = f"../../generated/FrustatedRing/QuantumResourcesvsT_N={N}_T={T_str}_LZR_step_test.npz"
+nombre_archivo = (
+    f"../../generated/FrustatedRing/QuantumResourcesvsT_N={N}_T={T_str}_LZR{tag}.npz"
+)
 
 np.savez(
     nombre_archivo,

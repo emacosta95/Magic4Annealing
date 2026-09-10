@@ -4,7 +4,7 @@ from src.annealing_utils import (
     get_longitudinal_hamiltonian,
     get_driver_hamiltonian,
 )
-from src.sparse_grape_method import SparseGRAPEModel, SimulatedAnnealingTrainer
+from src.sparse_grape_method import SparseGRAPEModel, SparseGRAPETrainer
 
 from src.hamiltonian_utils import frustrated_ring_jij_hz
 from src.utils import Z2SymmetricSector
@@ -15,7 +15,7 @@ import sys
 import time
 
 start = time.perf_counter()
-
+tag = ""
 T = int(sys.argv[1])
 
 N = int(sys.argv[2])  # odd; N=9,11,13 feasible for full 2^N exact diagonalization
@@ -57,7 +57,7 @@ tau = T  # try a range of tau; the ring is expected to need LARGE tau
 # for a linear ramp to reach the ground state (exponential
 # slowdown at the AC) -- this is exactly the motivation for
 # optimal control / LZS below.
-time_steps = int(50 * tau)
+time_steps = int(10 * tau)
 times = np.linspace(0, tau, time_steps)
 delta_t = times[1] - times[0]
 
@@ -67,7 +67,7 @@ number_parameters = 2  # M=2 plateaus/arms -> n_params = 3*M+1 = 7, matching
 type = "LZS"
 
 best_result = None
-for i in range(5):
+for i in range(50):
     model_i = SparseGRAPEModel(
         initial_state=psi_init_s,
         target_hamiltonian=target_hamiltonian_s,
@@ -79,21 +79,22 @@ for i in range(5):
         type=type,
         seed=i,
         random=True,
-        bounds_opt=True,
     )
 
-    trainer = SimulatedAnnealingTrainer(model_i, seed=i, verbose=True)
+    trainer = SparseGRAPETrainer(model_i, verbose=True)
     result = trainer.run()
     if best_result is None or result["energy"] < best_result["energy"]:
         best_result = result
         model = model_i
         best_seed = i
+
 h_driver, h_target = model.get_driving()
 schedule = h_target
 
 dim_s = driver_hamiltonian_s.shape[0]
 psi = psi_init_s.copy()
 theta = best_result["parameters"]
+
 spectrum = np.zeros((time_steps, nlevels))
 energy = np.zeros(time_steps)
 probabilities = np.zeros((time_steps, nlevels))
@@ -149,7 +150,9 @@ time_sub = times[::stride]
 # formateo consistente de T para evitar problemas de precisión en el nombre
 T_str = str(T)
 
-nombre_archivo = f"../../generated/FrustatedRing/QuantumResourcesvsT_N={N}_T={T_str}_LZR_bounded_SA.npz"
+nombre_archivo = (
+    f"../../generated/FrustatedRing/QuantumResourcesvsT_N={N}_T={T_str}_LZR{tag}.npz"
+)
 
 np.savez(
     nombre_archivo,

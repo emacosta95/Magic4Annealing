@@ -15,7 +15,7 @@ import sys
 import time
 
 start = time.perf_counter()
-
+tag = "_bounded"
 T = int(sys.argv[1])
 
 N = int(sys.argv[2])  # odd; N=9,11,13 feasible for full 2^N exact diagonalization
@@ -57,7 +57,7 @@ tau = T  # try a range of tau; the ring is expected to need LARGE tau
 # for a linear ramp to reach the ground state (exponential
 # slowdown at the AC) -- this is exactly the motivation for
 # optimal control / LZS below.
-time_steps = int(10 * tau)
+time_steps = int(100 * tau)
 times = np.linspace(0, tau, time_steps)
 delta_t = times[1] - times[0]
 
@@ -85,9 +85,9 @@ for i in range(50):
     trainer = SparseGRAPETrainer(model_i, verbose=True)
     result = trainer.run()
     if best_result is None or result["energy"] < best_result["energy"]:
-            best_result = result
-            model = model_i
-            best_seed = i
+        best_result = result
+        model = model_i
+        best_seed = i
 
 h_driver, h_target = model.get_driving()
 schedule = h_target
@@ -102,7 +102,7 @@ probabilities = np.zeros((time_steps, nlevels))
 psi_history_s = np.zeros((time_steps, dim_s), dtype=complex)
 eigenstates_history_s = np.zeros((time_steps, dim_s, nlevels), dtype=complex)
 
-sre = SREJax(n_qubits=nqubits, batch_size=1000)
+sre = SREJax(n_qubits=nqubits - 1, batch_size=1000)
 entanglement_entropy = EntanglementEntropy(nqubits=nqubits, n_A=nqubits // 2)
 
 
@@ -141,7 +141,7 @@ stride = max(1, 10)
 
 for i in trange(0, time_steps, stride):
     state_full = sector.lift(psi_history_s[i])
-    magic.append(sre(state_full))
+    magic.append(sre(psi_history_s[i]))
     entanglement.append(entanglement_entropy.von_neumann(state_full))
 
 
@@ -151,7 +151,9 @@ time_sub = times[::stride]
 # formateo consistente de T para evitar problemas de precisión en el nombre
 T_str = str(T)
 
-nombre_archivo = f"../../generated/FrustatedRing/QuantumResourcesvsT_N={N}_T={T_str}_LZR_bounded_magic_test.npz"
+nombre_archivo = (
+    f"../../generated/FrustatedRing/QuantumResourcesvsT_N={N}_T={T_str}_LZR{tag}.npz"
+)
 
 np.savez(
     nombre_archivo,
