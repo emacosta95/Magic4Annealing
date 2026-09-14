@@ -1,19 +1,16 @@
-import numpy as np
-from scipy.sparse.linalg import eigsh, expm_multiply
-from src.annealing_utils import (
-    get_longitudinal_hamiltonian,
-    get_driver_hamiltonian,
-)
-from src.sparse_grape_method import SparseGRAPEModel, SimulatedAnnealingTrainer
-
-from src.hamiltonian_utils import frustrated_ring_jij_hz
-from src.utils import Z2SymmetricSector
-from src.jax_utils import SREJax
-from src.utils import EntanglementEntropy
-from tqdm import trange
+import re
 import sys
 import time
-import re
+
+import numpy as np
+from scipy.sparse.linalg import eigsh, expm_multiply
+
+from src.annealing_utils import (
+    get_driver_hamiltonian,
+    get_longitudinal_hamiltonian,
+)
+from src.hamiltonian_utils import frustrated_ring_jij_hz
+from src.utils import Z2SymmetricSector
 
 start = time.perf_counter()
 N = int(sys.argv[1])  # odd; N=9,11,13 feasible for full 2^N exact diagonalization
