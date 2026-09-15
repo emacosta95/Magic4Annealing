@@ -167,16 +167,12 @@ def nambu_evolve(
     md = np.asarray(m_driver, dtype=np.complex128)
     mt = np.asarray(m_target, dtype=np.complex128)
 
-    snapshots = []
+    snapshots = []  # you save only some time steps to save memory
     for i in range(len(h_driver)):
         hk = float(h_driver[i]) * md + float(h_target[i]) * mt
         # hk is Hermitian -> eigh is faster and more stable than a general expm
         ek, vk = np.linalg.eigh(hk)
-        # FACTOR 2, do not remove.  With H = Psi^dag H_nambu Psi (no 1/2) the
-        # Heisenberg equation is i dPsi/dt = 2 H_nambu Psi, consistent with the
-        # quasiparticle energies being 2*e.  Verified on a sudden quench:
-        # <sz>(t) matches exact diagonalisation to 1e-15 with the 2, and is
-        # visibly wrong (0.73 vs 0.24 at t=0.7) without it.
+        # This is demonstrated in "The quantum Ising chain for beginners G. B. Mbeng, A. Russomanno, G. E. Santoro"
         prop = (vk * np.exp(-2j * dt * ek)) @ vk.conj().T
         w = prop @ w
         if store_every and (i % store_every == 0):
@@ -243,22 +239,6 @@ def ground_state_probability(w_t: np.ndarray, w_inst: np.ndarray) -> float:
     return float(np.abs(np.linalg.det(c[:l, :l])))
 
 
-def level_statistics(n_k: np.ndarray, eps: np.ndarray, n_mat=None):
-    """(P_ground, mean excitation number, residual energy).
-
-    P_ground is returned only if the full matrix N is supplied (see
-    instantaneous_occupations(..., return_matrix=True)); otherwise None,
-    because it cannot be obtained from the diagonal alone.
-    """
-    n_exc = np.sum(n_k)
-    e_res = np.sum(eps * n_k)
-    p0 = None
-    if n_mat is not None:
-        nu = np.clip(np.linalg.eigvalsh(n_mat), 0.0, 1.0)
-        p0 = float(np.sqrt(np.prod(1.0 - nu)))
-    return p0, n_exc, e_res
-
-
 def lowest_levels(eps, n_levels, parity=None, return_occ=False):
     """The lowest `n_levels` MANY-BODY energies without enumerating 2^l states.
 
@@ -279,7 +259,14 @@ def lowest_levels(eps, n_levels, parity=None, return_occ=False):
     Returns:
         excitation energies above E_gs (add E_gs = -sum_k e[l+k] yourself),
         and the occupation tuples if return_occ.
+
+    Reference: Best-first search (uniform-cost search / Dijkstra on a DAG with nonnegative
+    edge weights) over the subset lattice, generating combinations lazily via a
+    min-heap. Standard "K smallest subset sums" pattern — cf. LeetCode 2386
+    "Find the K-Sum of an Array"; generalizes the two-list case in LeetCode 373
+    "Find K Pairs with Smallest Sums".
     """
+
     eps = np.sort(np.asarray(eps, dtype=float))
     l = len(eps)
     heap = [(0.0, -1, ())]
@@ -340,7 +327,7 @@ def spectrum_along_schedule(
 def majorana_covariance(w: np.ndarray) -> np.ndarray:
     """Gamma [2l,2l], real antisymmetric, from the Bogoliubov matrix w."""
     l = w.shape[0] // 2
-    r = vacuum_R(np.asarray(w, dtype=np.complex128))
+    r = c_matrix_bogoliubov(np.asarray(w, dtype=np.complex128))
 
     # <Psi_mu Psi_nu> = R[mu, swap(nu)]
     swap = np.zeros((2 * l, 2 * l), dtype=np.complex128)
