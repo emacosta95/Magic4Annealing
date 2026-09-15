@@ -172,6 +172,27 @@ def build_plane_basis(theta1, theta2, theta3):
     return theta1, e1, e2, coords
 
 
+def build_line_basis(theta1, theta2):
+    """
+    Given 2 points in R^n, returns:
+    - origin (theta1)
+    - unit vector e1 along the line from theta1 to theta2
+    - coordinate (a) of theta1 and theta2 in that basis
+    """
+    v1 = theta2 - theta1
+    norm_v1 = np.linalg.norm(v1)
+    if norm_v1 < 1e-10:
+        raise ValueError("The two points are identical: they do not span a line.")
+    e1 = v1 / norm_v1
+
+    coords = {
+        "theta1": 0.0,
+        "theta2": norm_v1,
+    }
+
+    return theta1, e1, coords
+
+
 def energy_landscape(theta1, theta2, theta3, energy_fn, resolution=30, margin=0.3):
     """
     energy_fn: function that takes a theta vector (1D, same size as theta1/2/3)
@@ -210,6 +231,36 @@ def energy_landscape(theta1, theta2, theta3, energy_fn, resolution=30, margin=0.
                 print(f"Progress: {count}/{total}")
 
     return A, B, E, coords
+
+
+def energy_landscape_1d(theta1, theta2, energy_fn, resolution=30, margin=0.3):
+    """
+    energy_fn: function that takes a theta vector (1D, same size as theta1/2)
+               and returns a scalar (the final energy).
+    resolution: number of points along the line.
+    margin: extra fraction of space around the segment formed by the 2 points.
+    """
+    origin, e1, coords = build_line_basis(theta1, theta2)
+
+    a_min, a_max = coords["theta1"], coords["theta2"]
+    if a_min > a_max:
+        a_min, a_max = a_max, a_min
+
+    range_a = a_max - a_min
+    a_min -= margin * range_a
+    a_max += margin * range_a
+
+    a_vals = np.linspace(a_min, a_max, resolution)
+
+    E = np.zeros_like(a_vals)
+    total = resolution
+    for i in range(resolution):
+        theta = origin + a_vals[i] * e1
+        E[i] = energy_fn(theta)
+        if (i + 1) % 10 == 0:
+            print(f"Progress: {i + 1}/{total}")
+
+    return a_vals, E, coords
 
 
 def max_magic_landscape(
@@ -254,6 +305,36 @@ def max_magic_landscape(
     return A, B, E, coords
 
 
+def max_magic_landscape_1d(theta1, theta2, max_magic_fn, resolution=30, margin=0.3):
+    """
+    max_magic_fn: function that takes a theta vector (1D, same size as theta1/2)
+                  and returns a scalar (the maximum magic).
+    resolution: number of points along the line.
+    margin: extra fraction of space around the segment formed by the 2 points.
+    """
+    origin, e1, coords = build_line_basis(theta1, theta2)
+
+    a_min, a_max = coords["theta1"], coords["theta2"]
+    if a_min > a_max:
+        a_min, a_max = a_max, a_min
+
+    range_a = a_max - a_min
+    a_min -= margin * range_a
+    a_max += margin * range_a
+
+    a_vals = np.linspace(a_min, a_max, resolution)
+
+    E = np.zeros_like(a_vals)
+    total = resolution
+    for i in range(resolution):
+        theta = origin + a_vals[i] * e1
+        E[i] = max_magic_fn(theta)
+        if (i + 1) % 10 == 0:
+            print(f"Progress: {i + 1}/{total}")
+
+    return a_vals, E, coords
+
+
 def max_entanglement_landscape(
     theta1, theta2, theta3, max_entanglement_fn, resolution=30, margin=0.3
 ):
@@ -294,6 +375,38 @@ def max_entanglement_landscape(
                 print(f"Progress: {count}/{total}")
 
     return A, B, E, coords
+
+
+def max_entanglement_landscape_1d(
+    theta1, theta2, max_entanglement_fn, resolution=30, margin=0.3
+):
+    """
+    max_entanglement_fn: function that takes a theta vector (1D, same size as theta1/2)
+                        and returns a scalar (the maximum entanglement).
+    resolution: number of points along the line.
+    margin: extra fraction of space around the segment formed by the 2 points.
+    """
+    origin, e1, coords = build_line_basis(theta1, theta2)
+
+    a_min, a_max = coords["theta1"], coords["theta2"]
+    if a_min > a_max:
+        a_min, a_max = a_max, a_min
+
+    range_a = a_max - a_min
+    a_min -= margin * range_a
+    a_max += margin * range_a
+
+    a_vals = np.linspace(a_min, a_max, resolution)
+
+    E = np.zeros_like(a_vals)
+    total = resolution
+    for i in range(resolution):
+        theta = origin + a_vals[i] * e1
+        E[i] = max_entanglement_fn(theta)
+        if (i + 1) % 10 == 0:
+            print(f"Progress: {i + 1}/{total}")
+
+    return a_vals, E, coords
 
 
 def plot_energy_landscape(
@@ -342,6 +455,62 @@ def plot_energy_landscape(
     ax.set_ylabel("b (direction $e_2$)")
     ax.set_title(title)
     ax.set_aspect("equal")
+
+    # bottom como fracción del alto total
+    fig.subplots_adjust(bottom=alto_texto / alto_total)
+
+    texto_energias = "       ".join(
+        [rf"{nombres_latex[name]}: $E$ = {energies[name]:.6f}" for name in coords]
+    )
+    fig.text(
+        0.5,
+        0.2,
+        texto_energias,
+        fontsize=10,
+        ha="center",
+        va="center",
+        bbox=dict(boxstyle="round", facecolor="whitesmoke", edgecolor="gray"),
+    )
+
+    if save_path is not None:
+        plt.savefig(save_path, dpi=300)
+
+    plt.show()
+    return fig
+
+
+def plot_energy_landscape_1d(
+    a_vals, E, coords, energies, title="Energy landscape", save_path=None
+):
+    ancho = 8  # pulgadas
+    alto_plot = 4.5
+    alto_texto = 1.5  # pulgadas reservadas para la caja de texto abajo
+    alto_total = alto_plot + alto_texto
+
+    fig, ax = plt.subplots(figsize=(ancho, alto_total))
+
+    ax.plot(a_vals, E, "-", color="steelblue", linewidth=2)
+
+    nombres_latex = {
+        "theta1": r"$\theta_1$",
+        "theta2": r"$\theta_2$",
+    }
+
+    for name, a in coords.items():
+        idx = np.argmin(np.abs(a_vals - a))
+        ax.plot(a, E[idx], "o", color="red", markersize=8)
+        ax.annotate(
+            nombres_latex[name],
+            (a, E[idx]),
+            textcoords="offset points",
+            xytext=(6, 6),
+            color="black",
+            fontsize=12,
+        )
+
+    ax.set_xlabel("a (direction $e_1$)")
+    ax.set_ylabel("Final energy")
+    ax.set_title(title)
 
     # bottom como fracción del alto total
     fig.subplots_adjust(bottom=alto_texto / alto_total)
@@ -436,6 +605,61 @@ def plot_max_magic_landscape(
     return fig
 
 
+def plot_max_magic_landscape_1d(
+    a_vals, max_magic, coords, energies, title="Max magic landscape", save_path=None
+):
+    ancho = 8
+    alto_plot = 4.5
+    alto_texto = 1.5
+    alto_total = alto_plot + alto_texto
+
+    fig, ax = plt.subplots(figsize=(ancho, alto_total))
+
+    ax.plot(a_vals, max_magic, "-", color="steelblue", linewidth=2)
+
+    nombres_latex = {
+        "theta1": r"$\theta_1$",
+        "theta2": r"$\theta_2$",
+    }
+
+    for name, a in coords.items():
+        idx = np.argmin(np.abs(a_vals - a))
+        ax.plot(a, max_magic[idx], "o", color="red", markersize=8)
+        ax.annotate(
+            nombres_latex[name],
+            (a, max_magic[idx]),
+            textcoords="offset points",
+            xytext=(6, 6),
+            color="black",
+            fontsize=12,
+        )
+
+    ax.set_xlabel("a (direction $e_1$)")
+    ax.set_ylabel("Maximum magic")
+    ax.set_title(title)
+
+    fig.subplots_adjust(bottom=alto_texto / alto_total)
+
+    texto_energias = "       ".join(
+        [rf"{nombres_latex[name]}: $E$ = {energies[name]:.6f}" for name in coords]
+    )
+    fig.text(
+        0.5,
+        0.2,
+        texto_energias,
+        fontsize=10,
+        ha="center",
+        va="center",
+        bbox=dict(boxstyle="round", facecolor="whitesmoke", edgecolor="gray"),
+    )
+
+    if save_path is not None:
+        plt.savefig(save_path, dpi=300)
+
+    plt.show()
+    return fig
+
+
 def plot_max_entanglement_landscape(
     A,
     B,
@@ -490,6 +714,66 @@ def plot_max_entanglement_landscape(
     ax.set_aspect("equal")
 
     # bottom como fracción del alto total
+    fig.subplots_adjust(bottom=alto_texto / alto_total)
+
+    texto_energias = "       ".join(
+        [rf"{nombres_latex[name]}: $E$ = {energies[name]:.6f}" for name in coords]
+    )
+    fig.text(
+        0.5,
+        0.2,
+        texto_energias,
+        fontsize=10,
+        ha="center",
+        va="center",
+        bbox=dict(boxstyle="round", facecolor="whitesmoke", edgecolor="gray"),
+    )
+
+    if save_path is not None:
+        plt.savefig(save_path, dpi=300)
+
+    plt.show()
+    return fig
+
+
+def plot_max_entanglement_landscape_1d(
+    a_vals,
+    max_entanglement,
+    coords,
+    energies,
+    title="Max entanglement landscape",
+    save_path=None,
+):
+    ancho = 8
+    alto_plot = 4.5
+    alto_texto = 1.5
+    alto_total = alto_plot + alto_texto
+
+    fig, ax = plt.subplots(figsize=(ancho, alto_total))
+
+    ax.plot(a_vals, max_entanglement, "-", color="steelblue", linewidth=2)
+
+    nombres_latex = {
+        "theta1": r"$\theta_1$",
+        "theta2": r"$\theta_2$",
+    }
+
+    for name, a in coords.items():
+        idx = np.argmin(np.abs(a_vals - a))
+        ax.plot(a, max_entanglement[idx], "o", color="red", markersize=8)
+        ax.annotate(
+            nombres_latex[name],
+            (a, max_entanglement[idx]),
+            textcoords="offset points",
+            xytext=(6, 6),
+            color="black",
+            fontsize=12,
+        )
+
+    ax.set_xlabel("a (direction $e_1$)")
+    ax.set_ylabel("Maximum entanglement")
+    ax.set_title(title)
+
     fig.subplots_adjust(bottom=alto_texto / alto_total)
 
     texto_energias = "       ".join(
