@@ -511,6 +511,7 @@ def plot_energy_landscape_1d(
     ax.set_xlabel("a (direction $e_1$)")
     ax.set_ylabel("Final energy")
     ax.set_title(title)
+    bottom_frac = alto_texto / alto_total
 
     # bottom como fracción del alto total
     fig.subplots_adjust(bottom=alto_texto / alto_total)
@@ -520,7 +521,7 @@ def plot_energy_landscape_1d(
     )
     fig.text(
         0.5,
-        0.2,
+        0.6 * bottom_frac,
         texto_energias,
         fontsize=10,
         ha="center",
@@ -637,6 +638,7 @@ def plot_max_magic_landscape_1d(
     ax.set_xlabel("a (direction $e_1$)")
     ax.set_ylabel("Maximum magic")
     ax.set_title(title)
+    bottom_frac = alto_texto / alto_total
 
     fig.subplots_adjust(bottom=alto_texto / alto_total)
 
@@ -645,7 +647,7 @@ def plot_max_magic_landscape_1d(
     )
     fig.text(
         0.5,
-        0.2,
+        0.6 * bottom_frac,
         texto_energias,
         fontsize=10,
         ha="center",
@@ -773,6 +775,7 @@ def plot_max_entanglement_landscape_1d(
     ax.set_xlabel("a (direction $e_1$)")
     ax.set_ylabel("Maximum entanglement")
     ax.set_title(title)
+    bottom_frac = alto_texto / alto_total
 
     fig.subplots_adjust(bottom=alto_texto / alto_total)
 
@@ -781,7 +784,7 @@ def plot_max_entanglement_landscape_1d(
     )
     fig.text(
         0.5,
-        0.2,
+        bottom_frac * 0.6,
         texto_energias,
         fontsize=10,
         ha="center",

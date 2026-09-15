@@ -170,8 +170,8 @@ data_LZR2 = load_data(
 )
 
 
-theta1 = data_LZR[T]["theta"]
-theta2 = data_LZR2[T2]["theta"]
+theta1 = data_LZR[T]["theta"][0]
+theta2 = data_LZR2[T2]["theta"][0]
 
 J, JL, JR = 1.0, 0.5, 0.45
 
@@ -219,7 +219,7 @@ number_parameters = 2  # M=2 plateaus/arms -> n_params = 3*M+1 = 7, matching
 # Werner et al.'s reduction from Cote et al.'s ~100-parameter
 # variational schedule down to 7 parameters
 type = "LZS"
-resolution = 100
+resolution = 500
 
 sre = SREJax(n_qubits=nqubits - 1, batch_size=1000)
 entanglement_entropy = EntanglementEntropy(nqubits=nqubits, n_A=nqubits // 2)
