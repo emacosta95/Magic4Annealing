@@ -35,10 +35,10 @@ def load_data(archivo_salida):
     return resultado
 
 
-tag = "_bounded"  # "_NoGrad", "_step_test", "_bounded", "_no_random" or ""
+tag = "_bounded_SA"  # "_NoGrad", "_step_test", "_bounded", "_no_random" or ""
 tag_T = ""  # "_more_T" or ""
 N = 7
-nlevels = 2
+nlevels = 5
 data_linear = load_data(
     f"../../generated/FrustatedRing/QuantumResourcesvsT_N={N}_linear" + tag_T + ".npz"
 )

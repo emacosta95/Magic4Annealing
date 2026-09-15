@@ -84,7 +84,7 @@ for Ti in Tlist:
         data[f"T={Ti}_e{i}"] = spectrum[:, i]
 
 filename_tmp = (
-    f"../../generated/FrustatedRing/QuantumResourcesvsT_N={N}_LZR" + tag + "_tmp.npz"
+    f"../../generated/FrustatedRing/QuantumResourcesvsT_N={N}_LZR" + tag + ".npz"
 )
 np.savez(filename_tmp, **data)
 
