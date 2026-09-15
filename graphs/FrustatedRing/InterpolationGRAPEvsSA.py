@@ -144,7 +144,7 @@ def max_entanglement_fn_wrapper(theta):
     )
 
 
-T = 120
+T = 80
 T2 = T
 
 tag = "_bounded_SA"  # "_NoGrad", "_step_test", "_bounded", "_no_random" or ""
