@@ -37,7 +37,7 @@ graph_type = "probs"  # "max_entang", "max_magic", "final_energy", "entang_int",
 graph_type2 = "magic_evo"
 graph_type3 = "entang_evo"
 
-nlevels = 5  # number of energy levels to plot in the spectrum
+nlevels = 2  # number of energy levels to plot in the spectrum
 
 T = 120
 T2 = T
@@ -46,7 +46,7 @@ tag = "_bounded_SA"  # "_NoGrad", "_step_test", "_bounded", "_no_random" or ""
 tag_T = ""  # "_more_T" or ""
 N = 7
 
-tag2 = "_bounded"  # "_NoGrad", "_step_test", "_bounded", "_no_random" or ""
+tag2 = "_SA"  # "_NoGrad", "_step_test", "_bounded", "_no_random" or ""
 tag_T2 = ""
 N2 = N
 
@@ -698,19 +698,19 @@ def comparation_plot(graph_type):
     if graph_type in [
         "min_gap",
         "final_energy",
-        "max_entanglement",
+        "max_entang",
         "max_magic",
-        "entanglement_integral",
-        "magic_integral",
+        "entang_int",
+        "magic_int",
     ]:
         ax1.set_title(f"Frustrated Ring file={tag+tag_T}, N={N}")
         ax2.set_title(f"Frustrated Ring file={tag2+tag_T2}, N={N2}")
     elif graph_type in [
-        "probabilities",
+        "probs",
         "schedules",
-        "energy_spectrum",
-        "entanglement_evolution",
-        "magic_evolution",
+        "spectrum",
+        "entang_evo",
+        "magic_evo",
     ]:
         ax1.set_title(f"Frustrated Ring file={tag+tag_T}, N={N}, T={T}")
         ax2.set_title(f"Frustrated Ring file={tag2+tag_T2}, N={N2}, T={T2}")
