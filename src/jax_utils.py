@@ -192,7 +192,7 @@ def instantaneous_occupations(w_t: np.ndarray, w_inst: np.ndarray) -> np.ndarray
 
     Many-body spectrum:  E({n}) = E_gs + sum_k eps_k n_k,  eps_k = 2*e_inst[l+k].
 
-    Overlap  Rc = w_inst^dag w_t,  block  Vbar = Rc[l:, :l];  then
+    Overlap  C(t) = w_inst^dag w_t,  block  Vbar = C[l:, :l];  then
         n_k = diag(Vbar^dag Vbar)
     are the excitation probabilities.  Because the state is Gaussian these are
     INDEPENDENT, so

@@ -1,626 +1,620 @@
 """
-Free-fermion (Nambu / BdG) backend for annealing schedules of the 1d
-(frustrated) transverse-field Ising chain.
+Free-fermion (Nambu / BdG) representation of the 1d nearest-neighbour Ising
+chain in a transverse field, for annealing schedules
 
-Spin convention (fixed by build_1dIsing_model_freefermions):
+    H(t) = h_driver(t) * H_driver + h_target(t) * H_target
+    H_driver = - sum_i sigma^z_i
+    H_target = - sum_i J_i sigma^x_i sigma^x_{i+1}
+
+Spin convention (fixed by NambuIsing1D.build_bdg):
 
     H = - sum_i J_i sigma^x_i sigma^x_{i+1} - sum_i h_i sigma^z_i
       = Psi^dag  H_nambu  Psi  + const,        Psi = (c_1..c_l, c^dag_1..c^dag_l)
 
 NORMALISATION (verified in _selftest, do not guess it):
-    E_gs    = -sum_k e[l+k]
-    E({n})  = E_gs + sum_k (2 e[l+k]) n_k
+    E_vac   = -sum_k e[l+k]
+    E({n})  = E_vac + sum_k (2 e[l+k]) n_k
 so the PHYSICAL quasiparticle energy is TWICE the eigh eigenvalue.
 
     H_nambu = [[ A ,  B  ],
                [-B*, -A* ]],     A = j + diag(h),   B = j_b
 
-Frustrated ring  ->  J_i = -|J| (AFM in this sign convention), odd l, pbc=True.
-
 Bogoliubov slicing convention (same as src/utils_nambu_system.py):
     e, w = np.linalg.eigh(h_nambu)        # e ascending
-    u = w[:l, :l]      v = w[l:, :l]      # first l columns = negative branch
+    first l columns = negative branch, last l columns = quasiparticles g_k
 
-The quasiparticle vacuum is then characterised by the single matrix
+PARITY (read this before using the ring):
+    pbc=True flips the sign of the boundary bond -> antiperiodic fermions,
+    which is exact ONLY in the even-parity sector P = prod_i sigma^z_i = +1
+    (Mbeng, Russomanno, Santoro, arXiv:2009.09208, Eq. 32).  The state
+    evolved from the driver ground state (all up) stays in that sector.
+    The eigh "vacuum" (all g_k empty) is the minimum over BOTH parities: for a
+    frustrated ring (odd l, prod_i J_i < 0) one quasiparticle energy crosses
+    zero at prod_i h_i = prod_i |J_i|, and past that point the eigh vacuum is
+    odd, i.e. unphysical (zero domain walls on a frustrated ring).  The
+    physical levels are then those with an ODD number of quasiparticles.
+    The class fixes the physical sector once (self.sector_parity) and picks
+    the right occupations automatically via sign Pf(Gamma).
 
-    C = W1 @ W1^dag ,  W1 = w[:, :l]      C_{mu,nu} = < Psi_mu Psi_nu^dag >
+numpy + pfapack (Wimmer, ACM TOMS 38, 30 (2012)).
 
-from which every observable (Wick / Pfaffian) follows.  C is the only object
-the time evolution needs to carry.
-
-Pure numpy (no torch).  `device` arguments dropped; `dtype` defaults to
-np.float64 and is only needed where a complex build is wanted.
-
-Ema / Magic4Annealing - drop-in companion to src/schedule_utils.py
+Ema / Magic4Annealing
 """
 
 import heapq
 
 import numpy as np
 
+# NOTE: `from pfapack import pfaffian` imports the MODULE (not callable).
+# ctypes = compiled backend (~30x faster than pure python at 2l=200).
+from pfapack.ctypes import pfaffian
 
-def build_1dIsing_model_freefermions(
-    h: np.ndarray,
-    j_vec: np.ndarray,
-    pbc: bool,
-    diagonalization: bool = True,
-    dtype=np.float64,
-):
-    """Nambu/BdG matrix of the 1d Ising chain in transverse field, following the
-    convention of src/utils_nambu_system.py in Ema's github.
+
+class NambuIsing1D:
+    """Nambu representation of the 1d nn transverse-field Ising chain.
 
     Args:
-        h:     [l] transverse field, site resolved
-        j_vec: [l] coupling constants (j_vec[-1] is the boundary bond)
-        pbc:   if True the boundary bond is sign-flipped -> antiperiodic
-               (even-parity) sector.  See the parity note at the bottom.
-    Returns:
-        h_nambu [2l,2l]  (+ e [2l], w [2l,2l] if diagonalization)
-    """
-    h = np.asarray(h, dtype=dtype)
-    l = h.shape[-1]  # number of qubits
-
-    # bond[i] = coupling on the bond (i, i+1 mod l); bond[l-1] is the boundary
-    bond = np.array(j_vec, dtype=dtype)  # copy
-    bond[-1] = -1 * bond[-1] if pbc else 0.0
-
-    # T[i, i+1] = bond[i]  -> symmetric hopping, antisymmetric pairing.
-    # NOTE: the original j_l/j_r + roll construction is only correct for a
-    # UNIFORM j_vec.  For site-resolved couplings it produces
-    # j[i,i+1] = -J_i/2 but j[i+1,i] = -J_{i+1}/2, i.e. a NON-Hermitian A
-    # block; eigh then silently symmetrises using the lower triangle and
-    # returns wrong eigenvalues.  Verified: max|H - H^T| = 0.51 for random
-    # j_vec, 0.0 for uniform.
-    idx = np.arange(l)
-    t_mat = np.zeros((l, l), dtype=dtype)
-    # filling the nn bonds
-    t_mat[idx, (idx + 1) % l] = bond
-
-    # following "quantum ising chain for beginners"
-    j = -0.5 * (t_mat + t_mat.T)  # hopping block
-    b = -0.5 * (t_mat - t_mat.T)  # pairing block
-
-    # transverse field
-    a = j + np.diag(h)
-
-    # initializing the Hamiltonian in Nambu space
-    h_nambu = np.zeros((2 * l, 2 * l), dtype=dtype)
-    h_nambu[:l, :l] = a
-    h_nambu[:l, l:] = b
-    h_nambu[l:, :l] = -1 * np.conj(b)
-    h_nambu[l:, l:] = -1 * np.conj(a)
-
-    if diagonalization:
-        e, w = np.linalg.eigh(h_nambu)
-        return h_nambu, e, w
-    return h_nambu
-
-
-# ---------------------------------------------------------------------------
-# 1.  The two annealing operators
-# ---------------------------------------------------------------------------
-# build_1dIsing_model_freefermions is AFFINE in (h, j_vec) with zero constant
-# term, hence exactly
-#
-#     H_nambu(h_driver * 1, h_target * j_vec)
-#         = h_driver * M_driver  +  h_target * M_target
-#
-# which is precisely the linear structure SchedulerModel.forward() assumes.
-
-
-def nambu_annealing_operators(l: int, j_vec: np.ndarray, pbc: bool, dtype=np.float64):
-    """Return (M_driver, M_target), the two 2l x 2l terms of the BdG anneal.
-
-    M_driver  = uniform transverse field  (-sum_i sigma^z_i)   -> diag(I, -I)
-    M_target  = Ising ring                (-sum_i J_i sx sx)
-    """
-    zeros_l = np.zeros(l, dtype=dtype)
-    ones_l = np.ones(l, dtype=dtype)
-
-    m_driver = build_1dIsing_model_freefermions(
-        h=ones_l, j_vec=zeros_l, pbc=pbc, diagonalization=False, dtype=dtype
-    )
-    m_target = build_1dIsing_model_freefermions(
-        h=zeros_l, j_vec=j_vec, pbc=pbc, diagonalization=False, dtype=dtype
-    )
-    return m_driver, m_target
-
-
-# ---------------------------------------------------------------------------
-# 2.  State representation and time evolution
-# ---------------------------------------------------------------------------
-
-
-def c_matrix_bogoliubov(w: np.ndarray) -> np.ndarray:
-    """C_{mu,nu} = <Psi_mu Psi_nu^dag> for the quasiparticle vacuum of `w`.
-
-    C = W1 W1^dag with W1 = w[:, :l].  Blocks (l x l):
-        C[:l , :l ] = <c_i c_j^dag>
-        C[:l , l: ] = <c_i c_j>
-        C[l: , l: ] = <c_i^dag c_j>
-        C[l: , :l ] = <c_i^dag c_j^dag>
-    """
-    l = w.shape[0] // 2
-    w1 = w[:, :l]
-    return w1 @ w1.conj().T
-
-
-def nambu_evolve(
-    m_driver: np.ndarray,
-    m_target: np.ndarray,
-    h_driver: np.ndarray,
-    h_target: np.ndarray,
-    dt: float,
-    w0: np.ndarray,
-    store_every: int = 1,
-):
-    """Piecewise-constant BdG propagation:  i dW/dt = H_nambu(t) W.
-
-    Args:
-        h_driver, h_target: [nsteps] schedules, exactly what
-                            Schedule.get_driving() returns.
-        w0:                 [2l,2l] initial Bogoliubov matrix (eigh of H(t=0)).
-    Returns:
-        w_final [2l,2l] complex, and the list of stored snapshots.
-    """
-    w = np.asarray(w0, dtype=np.complex128)
-    md = np.asarray(m_driver, dtype=np.complex128)
-    mt = np.asarray(m_target, dtype=np.complex128)
-
-    snapshots = []  # you save only some time steps to save memory
-    for i in range(len(h_driver)):
-        hk = float(h_driver[i]) * md + float(h_target[i]) * mt
-        # hk is Hermitian -> eigh is faster and more stable than a general expm
-        ek, vk = np.linalg.eigh(hk)
-        # This is demonstrated in "The quantum Ising chain for beginners G. B. Mbeng, A. Russomanno, G. E. Santoro"
-        prop = (vk * np.exp(-2j * dt * ek)) @ vk.conj().T
-        w = prop @ w
-        if store_every and (i % store_every == 0):
-            snapshots.append(w.copy())
-    return w, snapshots
-
-
-# ---------------------------------------------------------------------------
-# 3.  Energy levels and level populations
-# ---------------------------------------------------------------------------
-
-
-def instantaneous_occupations(
-    w_t: np.ndarray, w_inst: np.ndarray, return_matrix: bool = False
-):
-    """Occupations of the instantaneous Bogoliubov modes in the evolved state.
-
-    Overlap  C = w_inst^dag w_t,  block  B = C[l:, :l];  then
-
-        N = B B^dag ,   N_km = <gamma_k^dag gamma_m>     (l x l, Hermitian)
-        n_k = diag(N)                                     row norms of B
-
-    Note the index: n_k is the ROW norm (index k = instantaneous mode), NOT
-    the column norm.  Verified against exact many-body evolution: the row
-    convention reproduces E_res to 1e-6, the column one gives 0.887 vs 0.347.
-
-    Many-body spectrum: E({n}) = E_gs + sum_k eps_k n_k, eps_k = 2*e_inst[l+k],
-    so the residual energy is exactly sum_k eps_k n_k -- no diagonalisation of
-    N needed, because H_inst = sum_k eps_k gamma^dag_k gamma_k + E_gs.
-
-    Probabilities are a different story: the modes are NOT independent in this
-    basis.  Use ground_state_probability() -- see the note there.
-    """
-    l = w_t.shape[0] // 2
-    c = np.asarray(w_inst, dtype=np.complex128).conj().T @ np.asarray(
-        w_t, dtype=np.complex128
-    )
-    b = c[l:, :l]
-    n_mat = b @ b.conj().T
-    n_k = np.clip(np.real(np.diag(n_mat)), 0.0, 1.0)
-    if return_matrix:
-        return n_k, n_mat
-    return n_k
-
-
-def ground_state_probability(w_t: np.ndarray, w_inst: np.ndarray) -> float:
-    """|<GS_inst | psi(t)>|^2  (Onishi overlap).
-
-    P_0 = |det C[:l, :l]| ,   C = w_inst^dag w_t.
-
-    NOT prod_k (1 - n_k) over the diagonal of N.  The eigenvalues of N come in
-    DEGENERATE PAIRS -- excitations are created in pairs because fermion parity
-    is conserved -- so there are only l/2 independent two-level channels, and
-
-        P_0 = prod_{j over distinct pairs} (1 - nu_j) = sqrt(prod_all (1-nu_j))
-
-    which equals |det C[:l,:l]|.  Verified against exact many-body evolution:
-    0.602879 vs 0.602879; the naive prod(1-n_k) gives 0.382700.
-    """
-    l = w_t.shape[0] // 2
-    c = np.asarray(w_inst, dtype=np.complex128).conj().T @ np.asarray(
-        w_t, dtype=np.complex128
-    )
-    return float(np.abs(np.linalg.det(c[:l, :l])))
-
-
-def lowest_levels(eps, n_levels, parity=None, return_occ=False):
-    """The lowest `n_levels` MANY-BODY energies without enumerating 2^l states.
-
-    Best-first (heap) search over occupation patterns: each pop yields the next
-    smallest excitation energy, each pop pushes at most l children.  Cost
-    O(n_levels * l * log(n_levels * l)) -- at l=10 it visits ~12 nodes instead
-    of 1024, and the gap to 2^l only widens.
-
-    Args:
-        eps:      [l] quasiparticle energies, ALREADY including the factor 2
-                  (i.e. 2*e[l:]).  Sorted internally.
-        parity:   None  -> all occupation patterns allowed (OBC).
-                  0 / 1 -> keep only patterns with an even / odd number of
-                  excitations.  REQUIRED for the ring: Jordan-Wigner splits
-                  H into two parity sectors and only one of them is physical
-                  for a given boundary condition, so half of the naive
-                  patterns are spurious.
-    Returns:
-        excitation energies above E_gs (add E_gs = -sum_k e[l+k] yourself),
-        and the occupation tuples if return_occ.
-
-    Reference: Best-first search (uniform-cost search / Dijkstra on a DAG with nonnegative
-    edge weights) over the subset lattice, generating combinations lazily via a
-    min-heap. Standard "K smallest subset sums" pattern — cf. LeetCode 2386
-    "Find the K-Sum of an Array"; generalizes the two-list case in LeetCode 373
-    "Find K Pairs with Smallest Sums".
+        l:     number of qubits
+        j_vec: [l] couplings, j_vec[i] on bond (i, i+1); j_vec[-1] is the
+               boundary bond (ignored if pbc=False)
+        pbc:   periodic spin chain (antiperiodic fermions, even sector)
     """
 
-    eps = np.sort(np.asarray(eps, dtype=float))
-    l = len(eps)
-    heap = [(0.0, -1, ())]
-    out, occs = [], []
-    while heap and len(out) < n_levels:
-        de, last, occ = heapq.heappop(heap)
-        if parity is None or (len(occ) % 2) == parity:
-            out.append(de)
-            occs.append(occ)
-        for k in range(last + 1, l):
-            heapq.heappush(heap, (de + eps[k], k, occ + (k,)))
-    if return_occ:
-        return np.array(out), occs
-    return np.array(out)
-
-
-def spectrum_along_schedule(
-    m_driver, m_target, h_driver, h_target, n_levels=10, parity=None
-):
-    """Lowest n_levels of the INSTANTANEOUS Hamiltonian at every schedule point.
-
-    Returns [nsteps, n_levels].  Note the labels are sorted energies, which do
-    NOT track a single adiabatic state through a crossing -- for populations
-    use instantaneous_occupations(), which is labelled by mode index k and is
-    continuous in s.
-    """
-    l = m_driver.shape[0] // 2
-    levels = np.zeros((len(h_driver), n_levels))
-    for i in range(len(h_driver)):
-        hk = float(h_driver[i]) * m_driver + float(h_target[i]) * m_target
-        ek = np.linalg.eigvalsh(hk)
-        eps = 2.0 * ek[l:]
-        e_gs = -0.5 * eps.sum()
-        levels[i] = e_gs + lowest_levels(eps, n_levels, parity=parity)
-    return levels
-
-
-# ---------------------------------------------------------------------------
-# 4.  Majorana covariance matrix  ->  Pauli expectation values  ->  magic
-# ---------------------------------------------------------------------------
-# Majoranas:  a_i = c_i + c_i^dag ,  b_i = -i (c_i - c_i^dag)
-# ordered as  w_(2i) = a_i , w_(2i+1) = b_i.
-#
-# Gamma_{mn} = i (delta_{mn} - <w_m w_n>)  is REAL antisymmetric for ANY state
-# (i[w_m,w_n] is Hermitian).  For a Gaussian state
-#
-#     < i^m  w_{i1} ... w_{i2m} >  =  Pf( Gamma[{i},{i}] )
-#
-# so every Pauli string costs O(|supp|^3).
-#
-# IMPORTANT for dynamics: the ground state of a REAL BdG matrix has vanishing
-# <aa> and <bb> Majorana blocks, which is what lets utils_nambu_system.py get
-# <sx sx> from a plain determinant of the single block `c`.  Once W(t) is
-# complex those blocks are non-zero and the determinant formula is WRONG.
-# Use the Pfaffian of the full Gamma below.
-
-
-def majorana_covariance(w: np.ndarray) -> np.ndarray:
-    """Gamma [2l,2l], real antisymmetric, from the Bogoliubov matrix w."""
-    l = w.shape[0] // 2
-    r = c_matrix_bogoliubov(np.asarray(w, dtype=np.complex128))
-
-    # <Psi_mu Psi_nu> = R[mu, swap(nu)]
-    swap = np.zeros((2 * l, 2 * l), dtype=np.complex128)
-    swap[:l, l:] = np.eye(l)
-    swap[l:, :l] = np.eye(l)
-    pmat = r @ swap  # <Psi Psi^T>
-
-    # Omega: w_maj = Omega Psi
-    omega = np.zeros((2 * l, 2 * l), dtype=np.complex128)
-    rows = np.arange(l)
-    omega[2 * rows, rows] = 1.0
-    omega[2 * rows, l + rows] = 1.0
-    omega[2 * rows + 1, rows] = -1j
-    omega[2 * rows + 1, l + rows] = 1j
-
-    ww = omega @ pmat @ omega.T  # <w_m w_n>
-    gamma = 1j * (np.eye(2 * l) - ww)
-    gamma = 0.5 * (gamma - gamma.T)  # enforce antisymmetry
-    return gamma.real
-
-
-def pfaffian(a: np.ndarray) -> float:
-    """Pfaffian of a real antisymmetric matrix (Parlett-Reid, O(n^3))."""
-    a = np.array(a, dtype=float, copy=True)
-    n = a.shape[0]
-    if n % 2 == 1:
-        return 0.0
-    pf = 1.0
-    for k in range(0, n - 1, 2):
-        # pivot the largest entry of column k into row k+1
-        piv = k + 1 + int(np.argmax(np.abs(a[k + 1 :, k])))
-        if piv != k + 1:
-            a[[k + 1, piv], k:] = a[[piv, k + 1], k:]
-            a[k:, [k + 1, piv]] = a[k:, [piv, k + 1]]
-            pf = -pf
-        if a[k + 1, k] == 0.0:
-            return 0.0
-        pf *= a[k, k + 1]
-        if k + 2 < n:
-            tau = a[k, k + 2 :] / a[k, k + 1]
-            a[k + 2 :, k + 2 :] += np.outer(tau, a[k + 2 :, k + 1])
-            a[k + 2 :, k + 2 :] -= np.outer(a[k + 2 :, k + 1], tau)
-    return pf
-
-
-# Pauli string -> Majorana support, via Jordan-Wigner:
-#   sigma^x_j = (prod_{m<j} -i a_m b_m) a_j
-#   sigma^y_j = (prod_{m<j} -i a_m b_m) b_j
-#   sigma^z_j = -i a_j b_j
-# JW is a Clifford circuit, so the SRE of the spin state equals the SRE
-# computed from these fermionic data -- no ambiguity.
-
-
-def pauli_expectation(gamma: np.ndarray, string: str) -> float:
-    """<P> for a Pauli string like 'IXZYI' in a Gaussian state.
-
-    Returns 0 for odd-weight Majorana support (parity superselection).
-    """
-    support = []
-    sign = 1.0
-    for j, s in enumerate(string):
-        if s == "I":
-            continue
-        if s == "Z":
-            support += [2 * j, 2 * j + 1]
-            sign *= -1.0  # the -i, absorbed into the i^m normalisation
-        elif s in ("X", "Y"):
-            for m in range(j):  # JW string
-                support += [2 * m, 2 * m + 1]
-                sign *= -1.0
-            support += [2 * j] if s == "X" else [2 * j + 1]
-        else:
-            raise ValueError(f"bad Pauli '{s}'")
-    # cancel repeated Majoranas (they square to 1); reorder with sign tracking
-    support, sign = _canonicalise(support, sign)
-    if len(support) == 0:
-        return float(sign)
-    if len(support) % 2 == 1:
-        return 0.0
-    return float(sign * pfaffian(gamma[np.ix_(support, support)]))
-
-
-def _canonicalise(idx, sign):
-    """Sort a Majorana index list, removing pairs, tracking the sign."""
-    idx = list(idx)
-    # bubble sort with sign, then cancel adjacent duplicates
-    for i in range(len(idx)):
-        for k in range(len(idx) - 1):
-            if idx[k] > idx[k + 1]:
-                idx[k], idx[k + 1] = idx[k + 1], idx[k]
-                sign = -sign
-    out = []
-    for x in idx:
-        if out and out[-1] == x:
-            out.pop()
-        else:
-            out.append(x)
-    return out, sign
-
-
-def sre_metropolis(
-    gamma: np.ndarray,
-    l: int,
-    alpha: int = 2,
-    n_samples: int = 20000,
-    burn: int = 2000,
-    seed: int = 0,
-):
-    """Stabilizer Renyi entropy M_alpha by Pauli-Markov sampling.
-
-    Samples P ~ Pi(P) = <P>^2 / 2^l (a normalised probability for pure states)
-    and estimates M_alpha = (1/(1-alpha)) log2 E[ <P>^{2(alpha-1)} ].
-    Cost: O(n_samples * l^3).  Exact brute force over 4^l is only feasible for
-    l <~ 12 -- use it to validate this estimator before trusting large l.
-    """
-    rng = np.random.default_rng(seed)
-    letters = "IXYZ"
-    cur = "".join(rng.choice(list(letters), size=l))
-    p_cur = pauli_expectation(gamma, cur) ** 2
-    if p_cur == 0.0:
-        cur = "I" * l
-        p_cur = 1.0
-
-    acc = []
-    for step in range(n_samples + burn):
-        # TWO-site moves. Fermion parity superselection makes <P> vanish
-        # identically unless the Majorana support has even weight, so
-        # single-site proposals are almost always rejected and the chain
-        # freezes (verified: single-site moves give M2 ~ 8.7 vs exact 1.42).
-        new = list(cur)
-        s1, s2 = rng.choice(l, size=2, replace=False)
-        new[s1] = letters[rng.integers(4)]
-        new[s2] = letters[rng.integers(4)]
-        new = "".join(new)
-        p_new = pauli_expectation(gamma, new) ** 2
-        if p_new > 0 and rng.random() < min(1.0, p_new / p_cur):
-            cur, p_cur = new, p_new
-        if step >= burn:
-            acc.append(p_cur ** (alpha - 1))
-
-    mean = np.mean(acc)
-    m_alpha = (1.0 / (1.0 - alpha)) * np.log2(mean)
-    return m_alpha, np.std(acc) / np.sqrt(len(acc))
-
-
-# ---------------------------------------------------------------------------
-# 5.  Scheduler model -- drop-in for SchedulerTrainer
-# ---------------------------------------------------------------------------
-try:
-    from schedule_utils import Schedule  # src/schedule_utils.py
-except ImportError:  # standalone use
-    Schedule = object
-
-
-class NambuSchedulerModel(Schedule):
-    """Free-fermion analogue of SchedulerModel.
-
-    Same interface (forward(parameters) -> energy) so SchedulerTrainer works
-    unchanged, but the forward is O(nsteps * l^3) instead of O(2^l).
-    """
-
-    def __init__(
-        self,
-        l,
-        j_vec,
-        tf,
-        number_of_parameters,
-        nsteps,
-        type,
-        seed,
-        pbc=True,
-        mode="annealing ansatz",
-        random=False,
-    ):
+    def __init__(self, l: int, j_vec: np.ndarray, pbc: bool):
         self.l = l
         self.pbc = pbc
         self.j_vec = np.asarray(j_vec, dtype=np.float64)
 
-        self.m_driver, self.m_target = nambu_annealing_operators(l, self.j_vec, pbc)
-        super().__init__(
-            tf=tf,
-            type=type,
-            number_of_parameters=number_of_parameters,
-            nsteps=nsteps,
-            seed=seed,
-            mode=mode,
-            random=random,
+        # build_bdg is AFFINE in (h, j_vec) with zero constant term, hence
+        # exactly  H_nambu(h_d * 1, h_t * j_vec) = h_d * M_driver + h_t * M_target
+        # which is precisely the linear structure the schedulers assume.
+        self.m_driver = self.build_bdg(np.ones(l), np.zeros(l), pbc)
+        self.m_target = self.build_bdg(np.zeros(l), self.j_vec, pbc)
+
+        # parity of the physical sector = parity of the driver ground state
+        _, w0 = np.linalg.eigh(self.m_driver)
+        self.sector_parity = self.vacuum_parity(w0)
+
+    # -----------------------------------------------------------------------
+    # 0.  Model constructors
+    # -----------------------------------------------------------------------
+    @classmethod
+    def frustrated_ring(cls, N: int, J: float = 1.0, JL: float = 0.5, JR: float = 0.45):
+        """Frustrated ring of Cote et al. / Werner et al. (Z -> sigma^x):
+
+            H_p = -sum_j J_j sx_j sx_{j+1},  J_N = -J_R,  J_{(N-/+1)/2} = J_L,  else J
+            0 < J_R < J_L < J
+
+        Same model as frustrated_ring_jij_hz.  Verified N=7:
+        E0 = -(N-3)J + J_R - 2J_L, lowest levels vs ED to 1e-14 for all s;
+        vacuum parity flips at s* = 1/(1 + gmean|J_j|) ~ 0.577.
+        """
+        assert N % 2 == 1, "N must be odd"
+        jv = np.full(N, float(J))
+        jv[(N - 1) // 2 - 1] = JL
+        jv[(N + 1) // 2 - 1] = JL
+        jv[-1] = -JR
+        return cls(N, jv, pbc=True)
+
+    @staticmethod
+    def build_bdg(h: np.ndarray, j_vec: np.ndarray, pbc: bool) -> np.ndarray:
+        """Nambu/BdG matrix [2l,2l], following "The quantum Ising chain for
+        beginners" (Mbeng, Russomanno, Santoro).
+
+        pbc: if True the boundary bond is sign-flipped -> antiperiodic
+             (even-parity) sector.  See the PARITY note at the top.
+        """
+        h = np.asarray(h, dtype=np.float64)
+        l = h.shape[-1]
+
+        # bond[i] = coupling on the bond (i, i+1 mod l); bond[l-1] is the boundary
+        bond = np.array(j_vec, dtype=np.float64)  # copy
+        bond[-1] = -1 * bond[-1] if pbc else 0.0
+
+        # T[i, i+1] = bond[i]  -> symmetric hopping, antisymmetric pairing.
+        # NOTE: the original j_l/j_r + roll construction is only correct for a
+        # UNIFORM j_vec.  For site-resolved couplings it produces
+        # j[i,i+1] = -J_i/2 but j[i+1,i] = -J_{i+1}/2, i.e. a NON-Hermitian A
+        # block; eigh then silently symmetrises using the lower triangle and
+        # returns wrong eigenvalues.  Verified: max|H - H^T| = 0.51 for random
+        # j_vec, 0.0 for uniform.
+        idx = np.arange(l)
+        t_mat = np.zeros((l, l))
+        t_mat[idx, (idx + 1) % l] = bond
+
+        j = -0.5 * (t_mat + t_mat.T)  # hopping block
+        b = -0.5 * (t_mat - t_mat.T)  # pairing block
+        a = j + np.diag(h)  # transverse field
+
+        h_nambu = np.zeros((2 * l, 2 * l))
+        h_nambu[:l, :l] = a
+        h_nambu[:l, l:] = b
+        h_nambu[l:, :l] = -1 * np.conj(b)
+        h_nambu[l:, l:] = -1 * np.conj(a)
+        return h_nambu
+
+    # -----------------------------------------------------------------------
+    # 1.  Instantaneous Hamiltonian
+    # -----------------------------------------------------------------------
+    def hamiltonian(self, h_driver: float, h_target: float) -> np.ndarray:
+        return float(h_driver) * self.m_driver + float(h_target) * self.m_target
+
+    def diagonalize(self, h_driver: float, h_target: float):
+        """e [2l] ascending, w [2l,2l].  Quasiparticle energies: 2*e[l:].
+
+        No zero-mode handling: on a ring there are no free edge Majoranas, so an
+        exactly zero quasiparticle energy only occurs if a time step lands on
+        the parity crossing s* itself (verified N=7, 15: min eps ~ 3e-4 on a
+        2001-point grid).  OBC at h -> 0 WOULD need it (degenerate e = 0 pair,
+        eigh basis not particle-hole paired).
+        """
+        return np.linalg.eigh(self.hamiltonian(h_driver, h_target))
+
+    # -----------------------------------------------------------------------
+    # 2.  Time evolution
+    # -----------------------------------------------------------------------
+    def evolve(self, h_driver, h_target, dt: float, w0=None, store_every: int = 0):
+        """Piecewise-constant BdG propagation:  i dW/dt = 2 H_nambu(t) W.
+
+        Args:
+            h_driver, h_target: [nsteps] schedules, exactly what
+                                get_driving() returns (Schedule, SparseGRAPEModel).
+            w0:                 [2l,2l] initial Bogoliubov matrix; default is the
+                                ground state of H(t=0).
+            store_every:        keep a snapshot every n steps (0 = none), to
+                                save memory.
+        Returns:
+            w_final [2l,2l] complex, and the list of snapshots.
+        """
+        if w0 is None:
+            _, w0 = self.diagonalize(h_driver[0], h_target[0])
+        w = np.asarray(w0, dtype=np.complex128)
+
+        snapshots = []
+        for i in range(len(h_driver)):
+            # H is Hermitian -> eigh is faster and more stable than a general expm
+            ek, vk = self.diagonalize(h_driver[i], h_target[i])
+            # factor 2: see NORMALISATION (Mbeng, Russomanno, Santoro)
+            prop = (vk * np.exp(-2j * dt * ek)) @ vk.conj().T
+            w = prop @ w
+            if store_every and (i % store_every == 0):
+                snapshots.append(w.copy())
+        return w, snapshots
+
+    # -----------------------------------------------------------------------
+    # 3.  Parity
+    # -----------------------------------------------------------------------
+    def vacuum_parity(self, w: np.ndarray) -> int:
+        """Fermion parity (+1/-1) of the Bogoliubov vacuum of w.
+
+        P = prod_i sigma^z_i = prod_i (-i A_i B_i) is the product of ALL 2l
+        Majoranas, so by Wick <P> = Pf(Gamma) = +-1 for a pure Gaussian state.
+        """
+        return int(np.sign(pfaffian(self.majorana_covariance(w))))
+
+    def relative_parity(self, w_inst: np.ndarray) -> int:
+        """Quasiparticle-number parity (0/1) of the instantaneous eigenstates
+        that live in the physical sector.
+
+        NOT always 0: on a frustrated ring the eigh vacuum flips parity once a
+        quasiparticle energy crosses zero (see PARITY note).  Verified L=5 AFM
+        ring: parity=0 gives sum P = 0 at s=0.8, this value gives 1.
+        """
+        return 0 if self.vacuum_parity(w_inst) == self.sector_parity else 1
+
+    # -----------------------------------------------------------------------
+    # 4.  Spectrum
+    # -----------------------------------------------------------------------
+    @staticmethod
+    def lowest_levels(eps, n_levels, parity=None):
+        """The lowest `n_levels` MANY-BODY excitations without enumerating 2^l states.
+
+        Best-first (heap) search over occupation patterns: each pop yields the
+        next smallest excitation energy, each pop pushes at most l children.
+        Cost O(n_levels * l * log(n_levels * l)).
+
+        Args:
+            eps:    [l] quasiparticle energies, ALREADY including the factor 2
+                    (i.e. 2*e[l:]), ascending.
+            parity: None -> all patterns; 0 / 1 -> even / odd number of
+                    quasiparticles only.
+        Returns:
+            excitation energies above E_vac [n_levels], occupation tuples.
+
+        Reference: best-first search (uniform-cost search / Dijkstra on a DAG
+        with nonnegative edge weights) over the subset lattice -- the standard
+        "K smallest subset sums" pattern (cf. LeetCode 2386).
+        """
+        eps = np.asarray(eps, dtype=float)
+        l = len(eps)
+        heap = [(0.0, -1, ())]
+        out, occs = [], []
+        while heap and len(out) < n_levels:
+            de, last, occ = heapq.heappop(heap)
+            if parity is None or (len(occ) % 2) == parity:
+                out.append(de)
+                occs.append(occ)
+            for k in range(last + 1, l):
+                heapq.heappush(heap, (de + eps[k], k, occ + (k,)))
+        return np.array(out), occs
+
+    def levels(self, h_driver: float, h_target: float, n_levels: int = 10):
+        """Lowest n_levels PHYSICAL many-body levels of H(h_driver, h_target).
+
+        Returns energies [n_levels], occupation tuples, and (e, w) of eigh.
+        """
+        e, w = self.diagonalize(h_driver, h_target)
+        eps = 2.0 * e[self.l :]
+        e_vac = -0.5 * eps.sum()
+        de, occs = self.lowest_levels(eps, n_levels, parity=self.relative_parity(w))
+        return e_vac + de, occs, (e, w)
+
+    def spectrum_along_schedule(self, h_driver, h_target, n_levels: int = 10):
+        """Lowest n_levels physical levels at every schedule point, [nsteps, n_levels].
+
+        Labels are sorted energies: they do NOT track a single adiabatic state
+        through a crossing.
+        """
+        out = np.zeros((len(h_driver), n_levels))
+        for i in range(len(h_driver)):
+            out[i] = self.levels(h_driver[i], h_target[i], n_levels)[0]
+        return out
+
+    # -----------------------------------------------------------------------
+    # 5.  Populations of the instantaneous levels
+    # -----------------------------------------------------------------------
+    def excited_vacuum(self, w_inst: np.ndarray, occ) -> np.ndarray:
+        """Multi-quasiparticle state prod_{k in occ} g^dag_k |0_inst> written as
+        a Bogoliubov vacuum.  Bally & Bender, EPJA 57, 69 (2021)
+        [arXiv:2010.14169], Eq. (14): (U_lk, V_lk) -> (V_lk^*, U_lk^*) for every
+        excited k; each swap flips the number parity.
+
+        In Nambu form: the vacuum is spanned by W1 = Sx Wp^*, and exciting mode
+        k replaces column k of W1 with Wp_k.  Returns W1' [2l, l].
+
+        GAUGE: W1 is rebuilt from Wp on purpose.  eigh returns the negative
+        branch in REVERSED order with independent phases (arbitrary rotations
+        if degenerate), so w_inst[:, :l] cannot be used column by column.
+        """
+        l = self.l
+        wp = np.asarray(w_inst, dtype=np.complex128)[:, l:]
+        w1 = np.concatenate([wp[l:].conj(), wp[:l].conj()], axis=0)  # Sx Wp^*
+        occ = list(occ)
+        w1[:, occ] = wp[:, occ]
+        return w1
+
+    def level_probabilities(
+        self, w_t, h_driver: float, h_target: float, n_levels: int = 10
+    ):
+        """P_n = |<n_inst | psi(t)>|^2 for the lowest n_levels physical levels.
+
+        Every eigenstate |S> is itself a Bogoliubov vacuum (excited_vacuum), so
+        Onishi gives directly
+
+            P_S = |det( W1_S^dag  W1_t )| ,     W1_t = w_t[:, :l]
+
+        (Nambu doubling: this |det| is already the SQUARED overlap).  O(l^3)
+        per level, no inversion, valid also when P_0 -> 0.
+        Verified vs exact evolution (L=5,6,8 OBC; L=5 AFM ring; N=7
+        frustrated ring): max |dP| ~ 1e-14, sum P = 1.
+
+        Returns energies [n_levels], probabilities [n_levels], occupations.
+        """
+        energies, occs, (_, w_inst) = self.levels(h_driver, h_target, n_levels)
+        wt1 = np.asarray(w_t, dtype=np.complex128)[:, : self.l]
+        probs = np.array(
+            [
+                abs(np.linalg.det(self.excited_vacuum(w_inst, s).conj().T @ wt1))
+                for s in occs
+            ]
+        )
+        return energies, probs, occs
+
+    def residual_energy(self, w_t, h_driver: float, h_target: float) -> float:
+        """<psi(t)| H |psi(t)> - E_gs  for the instantaneous H, exact.
+
+        Occupations of the instantaneous modes: overlap C = w_inst^dag w_t,
+        B = C[l:, :l],  n_k = diag(B B^dag)  (ROW norms -- the column
+        convention is wrong: verified 0.887 vs 0.347).
+        E(psi) = E_vac + sum_k eps_k n_k exactly, and E_gs is the lowest
+        PHYSICAL level, which is E_vac + eps_0 past the parity flip (using
+        E_vac there gives an offset of eps_0 = 0.9 for the N=7 frustrated ring).
+        """
+        l = self.l
+        energies, _, (e, w_inst) = self.levels(h_driver, h_target, 1)
+        eps = 2.0 * e[l:]
+        c = w_inst.conj().T @ np.asarray(w_t, dtype=np.complex128)
+        b = c[l:, :l]
+        n_k = np.clip(np.real(np.sum(np.abs(b) ** 2, axis=1)), 0.0, 1.0)
+        e_psi = -0.5 * eps.sum() + float(eps @ n_k)
+        return e_psi - float(energies[0])
+
+    # -----------------------------------------------------------------------
+    # 6.  Majorana covariance matrix  ->  Pauli expectation values
+    # -----------------------------------------------------------------------
+    # Majoranas:  a_i = c_i + c_i^dag ,  b_i = -i (c_i - c_i^dag)
+    # ordered as  w_(2i) = a_i , w_(2i+1) = b_i.
+    #
+    # Gamma_{mn} = i (delta_{mn} - <w_m w_n>)  is REAL antisymmetric for ANY state
+    # (i[w_m,w_n] is Hermitian).  For a Gaussian state
+    #
+    #     < i^m  w_{i1} ... w_{i2m} >  =  Pf( Gamma[{i},{i}] )
+    #
+    # IMPORTANT for dynamics: the ground state of a REAL BdG matrix has vanishing
+    # <aa> and <bb> Majorana blocks, which is what lets utils_nambu_system.py get
+    # <sx sx> from a plain determinant of a single block.  Once W(t) is complex
+    # those blocks are non-zero and the determinant formula is WRONG.
+    # Use the Pfaffian of the full Gamma.
+    def majorana_covariance(self, w: np.ndarray) -> np.ndarray:
+        """Gamma [2l,2l], real antisymmetric, from the Bogoliubov matrix w."""
+        l = self.l
+        w1 = np.asarray(w, dtype=np.complex128)[:, :l]
+        r = w1 @ w1.conj().T  # R_{mu,nu} = <Psi_mu Psi_nu^dag>
+
+        # <Psi_mu Psi_nu> = R[mu, swap(nu)]
+        swap = np.zeros((2 * l, 2 * l))
+        swap[:l, l:] = np.eye(l)
+        swap[l:, :l] = np.eye(l)
+        pmat = r @ swap
+
+        # Omega: w_maj = Omega Psi
+        omega = np.zeros((2 * l, 2 * l), dtype=np.complex128)
+        rows = np.arange(l)
+        omega[2 * rows, rows] = 1.0
+        omega[2 * rows, l + rows] = 1.0
+        omega[2 * rows + 1, rows] = -1j
+        omega[2 * rows + 1, l + rows] = 1j
+
+        ww = omega @ pmat @ omega.T  # <w_m w_n>
+        gamma = 1j * (np.eye(2 * l) - ww)
+        gamma = 0.5 * (gamma - gamma.T)  # enforce antisymmetry
+        return gamma.real
+
+    # -----------------------------------------------------------------------
+    # 6b. Entanglement entropy
+    # -----------------------------------------------------------------------
+    def entanglement_entropy(self, w: np.ndarray, block, base: float = 2.0) -> float:
+        """Von Neumann entropy S_A of a CONTIGUOUS block of spins (evolving state).
+
+        The reduced state of a Gaussian state is Gaussian, with covariance
+        Gamma_A = Gamma restricted to the block's 2|A| Majoranas.  i Gamma_A is
+        Hermitian with eigenvalues +-nu_j (0 <= nu_j <= 1), and
+
+            S_A = - sum_{all 2|A| eigenvalues} p log p ,   p = (1 + nu)/2
+                = sum_j H2((1 + nu_j)/2)
+
+        Contiguous blocks only: the Jordan-Wigner string does not cut the block,
+        so for a fixed-parity state spin and fermion reduced states coincide
+        (Vidal, Latorre, Rico, Kitaev, PRL 90, 227902 (2003)).
+
+        Args:
+            w:     w_t from evolve() (any matrix whose first l columns span the
+                   vacuum, also the [2l, l] output of excited_vacuum()).
+            block: (start, stop) sites, or an int la meaning (0, la).
+        """
+        start, stop = (0, int(block)) if np.isscalar(block) else block
+        maj = np.arange(2 * start, 2 * stop)
+        gamma_a = self.majorana_covariance(w)[np.ix_(maj, maj)]
+        p = np.clip(0.5 * (1.0 + np.linalg.eigvalsh(1j * gamma_a)), 1e-300, 1.0)
+        return float(-np.sum(p * np.log(p)) / np.log(base))
+
+    def eigenstate_entanglement_entropy(
+        self, h_driver: float, h_target: float, block, level: int = 0, base: float = 2.0
+    ) -> float:
+        """S_A of the `level`-th PHYSICAL instantaneous eigenstate of H(h_driver, h_target)
+        (level 0 = ground state), same ordering as levels() / level_probabilities().
+
+        The eigenstate is built as a Bogoliubov vacuum with excited_vacuum
+        (TAURUS Eq. 14), so the parity flip of the frustrated ring is handled.
+        Degenerate levels: the result depends on which state of the multiplet
+        is picked (any combination is an eigenstate).
+        """
+        _, occs, (_, w_inst) = self.levels(h_driver, h_target, level + 1)
+        return self.entanglement_entropy(
+            self.excited_vacuum(w_inst, occs[level]), block, base
         )
 
-        # target-Hamiltonian spectrum, for the residual energy
-        e_t, w_t = np.linalg.eigh(self.m_target)
-        # NORMALISATION (verified numerically, see _selftest):
-        #   E({n}) = -sum_k e[l+k]  +  sum_k (2 e[l+k]) n_k
-        # i.e. H = Psi^dag H_nambu Psi (NO 1/2), so the physical quasiparticle
-        # energy is TWICE the eigenvalue returned by eigh.
-        self.eps_target = 2.0 * e_t[l:]
-        self.w_target = w_t
-        self.e_gs_target = -0.5 * np.sum(self.eps_target)
+    # Pauli string -> Majorana support, via Jordan-Wigner:
+    #   sigma^x_j = (prod_{m<j} -i a_m b_m) a_j
+    #   sigma^y_j = (prod_{m<j} -i a_m b_m) b_j
+    #   sigma^z_j = -i a_j b_j
+    # JW is a Clifford circuit, so the SRE of the spin state equals the SRE
+    # computed from these fermionic data -- no ambiguity.
+    def pauli_expectation(self, gamma: np.ndarray, string: str) -> float:
+        """<P> for a Pauli string like 'IXZYI' in a Gaussian state.
 
-        self.energy = 1e3
-        self.w = None
-        self.history, self.history_parameters = [], []
-        self.run_number = 0
+        Returns 0 for odd-weight Majorana support (parity superselection).
+        """
+        support = []
+        sign = 1.0
+        for j, s in enumerate(string):
+            if s == "I":
+                continue
+            if s == "Z":
+                support += [2 * j, 2 * j + 1]
+                sign *= -1.0  # the -i, absorbed into the i^m normalisation
+            elif s in ("X", "Y"):
+                for m in range(j):  # JW string
+                    support += [2 * m, 2 * m + 1]
+                    sign *= -1.0
+                support += [2 * j] if s == "X" else [2 * j + 1]
+            else:
+                raise ValueError(f"bad Pauli '{s}'")
 
-    def forward(self, parameters):
-        self.parameters = parameters
-        dt = self.time[1] - self.time[0]
-        h_driver, h_target = self.get_driving()
+        # sort with sign tracking, then cancel repeated Majoranas (they square to 1)
+        for _ in range(len(support)):
+            for k in range(len(support) - 1):
+                if support[k] > support[k + 1]:
+                    support[k], support[k + 1] = support[k + 1], support[k]
+                    sign = -sign
+        idx = []
+        for x in support:
+            if idx and idx[-1] == x:
+                idx.pop()
+            else:
+                idx.append(x)
 
-        # ground state of H(t=0) = h_driver[0] * M_driver
-        h0 = float(h_driver[0]) * self.m_driver + float(h_target[0]) * self.m_target
-        _, w0 = np.linalg.eigh(h0)
+        if len(idx) == 0:
+            return float(sign)
+        if len(idx) % 2 == 1:
+            return 0.0
+        return float(sign * pfaffian(gamma[np.ix_(idx, idx)]))
 
-        w, _ = nambu_evolve(
-            self.m_driver, self.m_target, h_driver, h_target, dt, w0, store_every=0
-        )
-        self.w = w
+    # -----------------------------------------------------------------------
+    # 7.  Non-stabilizerness: Majorana sampling (Algorithm 1)
+    # -----------------------------------------------------------------------
+    @staticmethod
+    def _minor_det(gamma, idx, n_unit):
+        """det of (D + Gamma)|_idx, D = 1 on the last n_unit entries of idx, 0 before."""
+        if len(idx) == 0:
+            return 1.0
+        sub = gamma[np.ix_(idx, idx)].copy()
+        if n_unit:
+            k = np.arange(len(idx) - n_unit, len(idx))
+            sub[k, k] += 1.0
+        return float(np.linalg.det(sub))
 
-        n_k = instantaneous_occupations(w, self.w_target)
-        _, _, e_res = level_statistics(n_k, self.eps_target)
-        self.energy = float(e_res)  # residual energy w.r.t. target ground state
-        self.run_number += 1
-        return self.energy
+    def majorana_sampling(self, gamma: np.ndarray, n_samples: int, seed: int = 0):
+        """Algorithm 1 of Collura, De Nardis, Alba, Lami, arXiv:2412.05367
+        ("The non-stabilizerness of fermionic Gaussian states").
 
-    def diagnostics(self):
-        """P_ground, excitation number, Gamma at the final time."""
-        n_k, n_mat = instantaneous_occupations(
-            self.w, self.w_target, return_matrix=True
-        )
-        p0, n_exc, e_res = level_statistics(n_k, self.eps_target, n_mat)
+        Perfect (non-Markov) sampling of Majorana monomials x in {0,1}^{2L} from
+
+            pi(x) = det(Gamma|_x) / det(1 + Gamma)                     Eq. (6)
+
+        (= <P>^2 / 2^L for the Pauli string P <-> gamma_x).  Chain rule, Eq. (9),
+        with marginals, Eq. (11):
+
+            pi(x_1..x_mu) = det[(1_[mu+1,2L] + Gamma)|_(x_1..x_mu, 1..1)] / det(1+Gamma)
+
+        Setting x_mu = 1 keeps index mu with diagonal 0; x_mu = 0 drops it; the
+        two determinants sum to the previous marginal (det is linear in a
+        diagonal entry), so p(x_mu = 1 | x) = det_1 / (det_0 + det_1).
+        The sign convention of Gamma is irrelevant (principal minors of an
+        antisymmetric matrix are invariant under Gamma -> -Gamma).
+        Cost O(L^4) per sample.
+
+        Returns x [n_samples, 2L] (bool) and log pi(x) [n_samples] (natural log).
+        """
+        gamma = np.asarray(gamma, dtype=float)
+        n = gamma.shape[0]
+        rng = np.random.default_rng(seed)
+        _, logdet_norm = np.linalg.slogdet(np.eye(n) + gamma)
+
+        xs = np.zeros((n_samples, n), dtype=bool)
+        logp = np.zeros(n_samples)
+        for s in range(n_samples):
+            chosen = []
+            for mu in range(n):
+                rest = list(range(mu + 1, n))
+                d0 = self._minor_det(gamma, chosen + rest, n_unit=len(rest))
+                d1 = self._minor_det(gamma, chosen + [mu] + rest, n_unit=len(rest))
+                d0, d1 = max(d0, 0.0), max(d1, 0.0)  # both >= 0 up to rounding
+                if rng.random() < d1 / (d0 + d1):
+                    chosen.append(mu)
+                    xs[s, mu] = True
+            # pi(x) = det(Gamma|_x) / det(1+Gamma)
+            ld = np.linalg.slogdet(gamma[np.ix_(chosen, chosen)])[1] if chosen else 0.0
+            logp[s] = ld - logdet_norm
+        return xs, logp
+
+    def sre(
+        self, w: np.ndarray, alpha: float = 2, n_samples: int = 2000, seed: int = 0
+    ):
+        """Stabilizer Renyi entropy of the Gaussian state w (Algorithm 1).
+
+            sum_P pi^alpha = E_{x ~ pi}[ pi(x)^(alpha-1) ]
+
+            M_alpha   = log2(sum pi^alpha) / (1-alpha) - log2 D,        D = 2^L
+            M~_alpha  filtered version, Eqs. (7)-(8): I and the parity string
+                      (pi = 1/D each for a pure Gaussian state) removed and
+                      pi renormalised; subtracted exactly from the estimate.
+
+        Returns dict(m_alpha, m_alpha_filtered, err), results in bits, err =
+        standard error of M_alpha (delta method).
+        Verified: N=7 frustrated ring after anneal, M2 exact 3.151 vs 3.148(32);
+        filtered 3.344 vs 3.341.
+        """
+        gamma = self.majorana_covariance(w)
+        l = self.l
+        _, logp = self.majorana_sampling(gamma, n_samples, seed)
+        wts = np.exp((alpha - 1) * logp)
+        mean, sem = wts.mean(), wts.std(ddof=1) / np.sqrt(n_samples)
+        d = 2.0**l
+        m_alpha = np.log2(mean) / (1 - alpha) - l
+        # filtered: remove the two trivial strings, renormalise pi~ = pi / (1 - 2/D)
+        s_f = (mean - 2 * d ** (-alpha)) / (1 - 2 / d) ** alpha
+        m_filt = np.log2(s_f) / (1 - alpha) - np.log2(d - 2)
+        err = sem / (mean * abs(1 - alpha) * np.log(2))
         return dict(
-            n_k=n_k,
-            p_ground=float(p0),
-            n_exc=float(n_exc),
-            e_res=float(e_res),
-            gamma=majorana_covariance(self.w),
+            m_alpha=float(m_alpha), m_alpha_filtered=float(m_filt), err=float(err)
         )
 
 
 # ---------------------------------------------------------------------------
-# 6.  Self-test against exact diagonalisation (run: python nambu_schedule_utils.py)
+# Self-test against exact diagonalisation (run: python free_fermions_utils.py)
 # ---------------------------------------------------------------------------
-def _exact_ising(l, h, j_vec):
-    """Dense H = -sum J_i sx_i sx_{i+1} - sum h_i sz_i, OBC."""
+def _exact_ising(l, h, j_vec, pbc):
+    """Dense H = -sum J_i sx_i sx_{i+1} - sum h_i sz_i."""
     sx = np.array([[0, 1], [1, 0]], dtype=float)
     sz = np.array([[1, 0], [0, -1]], dtype=float)
-    ident = np.eye(2)
 
     def op(mat, site):
         out = np.array([[1.0]])
         for k in range(l):
-            out = np.kron(out, mat if k == site else ident)
+            out = np.kron(out, mat if k == site else np.eye(2))
         return out
 
     ham = np.zeros((2**l, 2**l))
     for i in range(l):
         ham -= h[i] * op(sz, i)
-    for i in range(l - 1):
-        ham -= j_vec[i] * op(sx, i) @ op(sx, i + 1)
+    for i in range(l if pbc else l - 1):
+        ham -= j_vec[i] * op(sx, i) @ op(sx, (i + 1) % l)
     return ham
 
 
-def _selftest(l=6, seed=1):
+def _even_sector(l):
+    z = np.array([1, -1])
+    par = np.array([1])
+    for _ in range(l):
+        par = np.kron(par, z)
+    return par > 0
+
+
+def _exact_entropy(psi, l, block, base=2.0):
+    """S of sites [start, stop) from a dense state vector (Schmidt values)."""
+    start, stop = block
+    keep = list(range(start, stop))
+    rest = [i for i in range(l) if i not in keep]
+    m = np.transpose(psi.reshape([2] * l), keep + rest).reshape(2 ** len(keep), -1)
+    p = np.linalg.svd(m, compute_uv=False) ** 2
+    p = p[p > 1e-15]
+    return float(-np.sum(p * np.log(p)) / np.log(base))
+
+
+def _selftest_statics(l=6, seed=1):
+    import itertools
+
+    print("--- statics (ring ground state, even sector) ---")
     rng = np.random.default_rng(seed)
-    h_np = rng.uniform(0.3, 1.7, size=l)
-    j_np = rng.uniform(0.3, 1.7, size=l)
+    h = rng.uniform(0.3, 1.7, size=l)
+    j = rng.uniform(0.3, 1.7, size=l)
+    model = NambuIsing1D(l, j, pbc=True)
+    # a generic site-resolved field is not h_d*1, so diagonalise build_bdg directly
+    e, w = np.linalg.eigh(NambuIsing1D.build_bdg(h, j, pbc=True))
+    even = _even_sector(l)
+    ev, evec = np.linalg.eigh(_exact_ising(l, h, j, pbc=True)[np.ix_(even, even)])
+    psi = np.zeros(2**l)
+    psi[even] = evec[:, 0]
 
-    _, e, w = build_1dIsing_model_freefermions(h_np, j_np, pbc=False)
-
-    ham = _exact_ising(l, h_np, j_np)
-    ev, evec = np.linalg.eigh(ham)
-    psi = evec[:, 0]
-
-    gamma = majorana_covariance(w)
-
-    # (a) energy: E_gs = -sum_k e[l+k]   (excitations cost 2*e[l+k])
-    e_bdg = -float(np.sum(e[l:]))
-    print(f"E_gs  exact={ev[0]: .8f}   BdG={e_bdg: .8f}   diff={abs(ev[0]-e_bdg):.2e}")
-
-    # (a2) the whole many-body spectrum, and the low-lying levels via the heap
     eps = 2.0 * e[l:]
-    lows = e_bdg + lowest_levels(eps, 8)
+    lows = (
+        -0.5 * eps.sum()
+        + model.lowest_levels(eps, 8, parity=model.relative_parity(w))[0]
+    )
     print(f"lowest 8 levels, max dev vs exact: {np.abs(lows - ev[:8]).max():.2e}")
 
-    # (b) a few Pauli strings via Pfaffian vs exact
-    tests = [
-        "Z" + "I" * (l - 1),
-        "I" * (l - 1) + "Z",
-        "XX" + "I" * (l - 2),
-        "IZZ" + "I" * (l - 3),
-        "XIIX" + "I" * (l - 4),
-        "YY" + "I" * (l - 2),
-    ]
+    gamma = model.majorana_covariance(w)
     pauli = {
         "I": np.eye(2),
         "X": np.array([[0, 1], [1, 0]], dtype=complex),
@@ -628,79 +622,101 @@ def _selftest(l=6, seed=1):
         "Z": np.array([[1, 0], [0, -1]], dtype=complex),
     }
     worst = 0.0
-    for s in tests:
+    for s in [
+        "Z" + "I" * (l - 1),
+        "XX" + "I" * (l - 2),
+        "IZZ" + "I" * (l - 3),
+        "XIIX" + "I" * (l - 4),
+        "YY" + "I" * (l - 2),
+    ]:
         mat = np.array([[1.0 + 0j]])
         for ch in s:
             mat = np.kron(mat, pauli[ch])
-        exact = float(np.real(psi.conj() @ mat @ psi))
-        gauss = pauli_expectation(gamma, s)
-        worst = max(worst, abs(exact - gauss))
-        print(f"  <{s}>  exact={exact: .8f}  pfaffian={gauss: .8f}")
+        worst = max(
+            worst,
+            abs(np.real(psi.conj() @ mat @ psi) - model.pauli_expectation(gamma, s)),
+        )
     print(f"worst Pauli discrepancy: {worst:.2e}")
 
-    # (c) SRE: brute force vs Metropolis
-    import itertools
-
-    tot = 0.0
-    for combo in itertools.product("IXYZ", repeat=l):
-        tot += pauli_expectation(gamma, "".join(combo)) ** 4
-    m2_exact = -np.log2(tot / (2**l))
-    m2_mc, err = sre_metropolis(gamma, l, alpha=2, n_samples=8000, burn=1000)
-    print(f"M2  brute force={m2_exact:.5f}   metropolis={m2_mc:.5f}")
+    tot = sum(
+        model.pauli_expectation(gamma, "".join(c)) ** 4
+        for c in itertools.product("IXYZ", repeat=l)
+    )
+    res = model.sre(w, alpha=2, n_samples=4000)
+    print(
+        f"M2  brute force={-np.log2(tot / 2**l):.5f}   "
+        f"Algorithm 1={res['m_alpha']:.5f} +- {res['err']:.5f}"
+    )
 
 
 def _selftest_dynamics():
-    """Validate nambu_evolve + occupations against exact many-body evolution."""
+    """level_probabilities / residual_energy vs exact many-body evolution."""
     from scipy.linalg import expm
 
     print("\n--- dynamics vs exact diagonalisation ---")
-    print(
-        f"{'L':>3} {'s_f':>5} {'tf':>5} | {'E_res exact':>12} {'E_res BdG':>12}"
-        f" | {'P0 exact':>10} {'P0 BdG':>10}"
-    )
-    for l, seed, sf, tf in [
-        (6, 0, 0.7, 3.0),
-        (6, 1, 0.9, 1.0),
-        (8, 2, 0.5, 5.0),
-        (5, 4, 0.3, 0.8),
-    ]:
-        rng = np.random.default_rng(seed)
-        j_np = rng.uniform(0.5, 1.5, l)
-        j_np[-1] = 0.0  # OBC
-        md, mt = nambu_annealing_operators(l, j_np, pbc=False)
-        h_d = _exact_ising(l, np.ones(l), np.zeros(l))
-        h_t = _exact_ising(l, np.zeros(l), j_np)
-
-        nsteps = 1000
+    rng = np.random.default_rng(0)
+    j_fm = rng.uniform(0.5, 1.5, 6)
+    cases = [
+        ("FM ring L=6", NambuIsing1D(6, j_fm, pbc=True), 3.0),
+        ("AFM ring L=5", NambuIsing1D(5, -np.ones(5), pbc=True), 3.0),
+        ("frustrated N=7", NambuIsing1D.frustrated_ring(7), 10.0),
+    ]
+    for name, model, tf in cases:
+        l = model.l
+        hd_s = _exact_ising(l, np.ones(l), np.zeros(l), model.pbc)
+        ht_s = _exact_ising(l, np.zeros(l), model.j_vec, model.pbc)
+        nsteps = 600
         dt = tf / nsteps
-        t = np.linspace(0, tf, nsteps)
-        s_sched = sf * t / tf
-        hd, ht = 1 - s_sched, s_sched
+        s = np.linspace(0, 1, nsteps)
+        hd, ht = 1 - s, s
 
-        _, w0 = np.linalg.eigh(hd[0] * md + ht[0] * mt)
-        _, v0 = np.linalg.eigh(hd[0] * h_d + ht[0] * h_t)
-        psi = v0[:, 0].astype(complex)
+        psi = np.linalg.eigh(hd_s)[1][:, 0].astype(complex)
         for i in range(nsteps):
-            psi = expm(-1j * dt * (hd[i] * h_d + ht[i] * h_t)) @ psi
-        w, _ = nambu_evolve(md, mt, hd, ht, dt, w0, store_every=0)
+            psi = expm(-1j * dt * (hd[i] * hd_s + ht[i] * ht_s)) @ psi
+        w, _ = model.evolve(hd, ht, dt)
 
-        sf_ = s_sched[-1]
-        h_ins = (1 - sf_) * h_d + sf_ * h_t
-        m_ins = (1 - sf_) * md + sf_ * mt
-        e_in, w_in = np.linalg.eigh(m_ins)
-        eps = 2 * e_in[l:]
-        ev_i, evec_i = np.linalg.eigh(h_ins)
-
-        e_exact = np.real(psi.conj() @ h_ins @ psi) - ev_i[0]
-        p0_exact = abs(evec_i[:, 0].conj() @ psi) ** 2
-        n_k, n_mat = instantaneous_occupations(w, w_in, return_matrix=True)
-        p0, _, e_res = level_statistics(n_k, eps, n_mat)
-        print(
-            f"{l:>3} {sf:>5} {tf:>5} | {e_exact:12.8f} {e_res:12.8f}"
-            f" | {p0_exact:10.7f} {p0:10.7f}"
-        )
+        even = _even_sector(l)
+        for sf in (0.3, 0.8, 1.0):
+            h_ins = (1 - sf) * hd_s + sf * ht_s
+            ev, vec = np.linalg.eigh(h_ins[np.ix_(even, even)])
+            amp = vec.conj().T @ psi[even]
+            n_lv = min(2 ** (l - 1), 64)
+            E, P, _ = model.level_probabilities(w, 1 - sf, sf, n_levels=n_lv)
+            dE = np.abs(np.sort(E)[:6] - ev[:6]).max()
+            dP = max(
+                abs(
+                    P[np.isclose(E, x, atol=1e-6)].sum()
+                    - (np.abs(amp[np.isclose(ev, x, atol=1e-6)]) ** 2).sum()
+                )
+                for x in E[:6]
+            )
+            # entanglement: evolving state and instantaneous GS (if non-degenerate)
+            dS = max(
+                abs(model.entanglement_entropy(w, blk) - _exact_entropy(psi, l, blk))
+                for blk in [(0, l // 2), (1, l - 1)]
+            )
+            if ev[1] - ev[0] > 1e-8:
+                gs = np.zeros(2**l)
+                gs[even] = vec[:, 0]
+                dS = max(
+                    dS,
+                    max(
+                        abs(
+                            model.eigenstate_entanglement_entropy(1 - sf, sf, blk)
+                            - _exact_entropy(gs, l, blk)
+                        )
+                        for blk in [(0, l // 2), (1, l - 1)]
+                    ),
+                )
+            e_res_ex = np.real(psi.conj() @ h_ins @ psi) - ev[0]
+            e_res = model.residual_energy(w, 1 - sf, sf)
+            print(
+                f"{name:>15} s={sf:.1f} | max dE={dE:.1e}  max dP={dP:.1e}  "
+                f"sumP={P.sum():.6f}  dE_res={abs(e_res - e_res_ex):.1e}  dS={dS:.1e}  "
+                f"flip={model.relative_parity(model.diagonalize(1 - sf, sf)[1])}"
+            )
 
 
 if __name__ == "__main__":
-    _selftest()
+    _selftest_statics()
     _selftest_dynamics()
