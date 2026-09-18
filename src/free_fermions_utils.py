@@ -45,6 +45,21 @@ import heapq
 
 import numpy as np
 
+
+def _dexp_weights(ek, dt):
+    """F_jk = (phi_j - phi_k)/(e_j - e_k), phi = exp(-2i dt e); diag -> -2i dt phi.
+    Exact derivative of exp(-2i dt H) in the eigenbasis (Duncan et al. 2025). https://arxiv.org/abs/2501.16436
+    """
+    phi = np.exp(-2j * dt * ek)
+    de = ek[:, None] - ek[None, :]
+    # condition of degeneracy
+    deg = np.abs(de) < 1e-10
+    # computation of the weight
+    f = np.where(deg, 0.0, (phi[:, None] - phi[None, :]) / np.where(deg, 1.0, de))
+    diag_val = -2j * dt * 0.5 * (phi[:, None] + phi[None, :])
+    return np.where(deg, diag_val, f), phi
+
+
 # NOTE: `from pfapack import pfaffian` imports the MODULE (not callable).
 # ctypes = compiled backend (~30x faster than pure python at 2l=200).
 from pfapack.ctypes import pfaffian
@@ -181,6 +196,29 @@ class NambuIsing1D:
                 snapshots.append(w.copy())
         return w, snapshots
 
+    def instantaneous_states(
+        self, h_driver, h_target, store_every: int = 1, level: int = 0
+    ):
+        """Instantaneous PHYSICAL eigenstate `level` (0 = ground state) along a
+        schedule, at the same steps as evolve(..., store_every): i % store_every == 0.
+
+        Adiabatic reference for the evolved snapshots.  Each state is a
+        Bogoliubov vacuum W1 [2l, l] built with excited_vacuum, so past the
+        parity flip of the frustrated ring the physical (odd-occupation)
+        ground state is returned, not the unphysical eigh vacuum.
+        Degenerate levels: the state within the multiplet is arbitrary.
+
+        Returns:
+            states [n_snap] list of W1 [2l, l],  energies [n_snap],  steps [n_snap]
+        """
+        steps = np.arange(0, len(h_driver), max(int(store_every), 1))
+        states, energies = [], []
+        for i in steps:
+            en, occs, (_, w_inst) = self.levels(h_driver[i], h_target[i], level + 1)
+            states.append(self.excited_vacuum(w_inst, occs[level]))
+            energies.append(en[level])
+        return states, np.array(energies), steps
+
     # -----------------------------------------------------------------------
     # 3.  Parity
     # -----------------------------------------------------------------------
@@ -280,6 +318,7 @@ class NambuIsing1D:
         wp = np.asarray(w_inst, dtype=np.complex128)[:, l:]
         w1 = np.concatenate([wp[l:].conj(), wp[:l].conj()], axis=0)  # Sx Wp^*
         occ = list(occ)
+        # switching of the columns for describing a new effective vacuum for \prod_{a in occ} \gamma_a^dag
         w1[:, occ] = wp[:, occ]
         return w1
 
@@ -332,8 +371,8 @@ class NambuIsing1D:
     # -----------------------------------------------------------------------
     # 6.  Majorana covariance matrix  ->  Pauli expectation values
     # -----------------------------------------------------------------------
-    # Majoranas:  a_i = c_i + c_i^dag ,  b_i = -i (c_i - c_i^dag)
-    # ordered as  w_(2i) = a_i , w_(2i+1) = b_i.
+    # Majoranas:  A_i = c_i + c_i^dag ,  B_i = -i (c_i - c_i^dag)
+    # ordered as  w_(2i) = A_i , w_(2i+1) = B_i.
     #
     # Gamma_{mn} = i (delta_{mn} - <w_m w_n>)  is REAL antisymmetric for ANY state
     # (i[w_m,w_n] is Hermitian).  For a Gaussian state
@@ -341,8 +380,8 @@ class NambuIsing1D:
     #     < i^m  w_{i1} ... w_{i2m} >  =  Pf( Gamma[{i},{i}] )
     #
     # IMPORTANT for dynamics: the ground state of a REAL BdG matrix has vanishing
-    # <aa> and <bb> Majorana blocks, which is what lets utils_nambu_system.py get
-    # <sx sx> from a plain determinant of a single block.  Once W(t) is complex
+    # <AA> and <BB> Majorana blocks, which is what lets utils_nambu_system.py get
+    # <SX SX> from a plain determinant of a single block.  Once W(t) is complex
     # those blocks are non-zero and the determinant formula is WRONG.
     # Use the Pfaffian of the full Gamma.
     def majorana_covariance(self, w: np.ndarray) -> np.ndarray:
@@ -420,45 +459,65 @@ class NambuIsing1D:
     #   sigma^z_j = -i a_j b_j
     # JW is a Clifford circuit, so the SRE of the spin state equals the SRE
     # computed from these fermionic data -- no ambiguity.
-    def pauli_expectation(self, gamma: np.ndarray, string: str) -> float:
-        """<P> for a Pauli string like 'IXZYI' in a Gaussian state.
-
-        Returns 0 for odd-weight Majorana support (parity superselection).
-        """
-        support = []
-        sign = 1.0
+    @staticmethod
+    def pauli_to_majorana(string: str):
+        """P = phase * gamma_x, x sorted.  JW: sz = -i a b,
+        sx/sy = (prod_{m<j} -i a_m b_m) a_j / b_j.  State-independent."""
+        support, phase = [], 1.0 + 0j
         for j, s in enumerate(string):
             if s == "I":
                 continue
             if s == "Z":
                 support += [2 * j, 2 * j + 1]
-                sign *= -1.0  # the -i, absorbed into the i^m normalisation
+                phase *= -1j
             elif s in ("X", "Y"):
-                for m in range(j):  # JW string
+                for m in range(j):
                     support += [2 * m, 2 * m + 1]
-                    sign *= -1.0
+                    phase *= -1j
                 support += [2 * j] if s == "X" else [2 * j + 1]
             else:
                 raise ValueError(f"bad Pauli '{s}'")
-
-        # sort with sign tracking, then cancel repeated Majoranas (they square to 1)
-        for _ in range(len(support)):
+        for _ in range(len(support)):  # sort, -1 per swap
             for k in range(len(support) - 1):
                 if support[k] > support[k + 1]:
                     support[k], support[k + 1] = support[k + 1], support[k]
-                    sign = -sign
+                    phase = -phase
         idx = []
-        for x in support:
+        for x in support:  # w^2 = 1
             if idx and idx[-1] == x:
                 idx.pop()
             else:
                 idx.append(x)
+        return phase, np.array(idx, dtype=int)
 
-        if len(idx) == 0:
-            return float(sign)
-        if len(idx) % 2 == 1:
+    @staticmethod
+    def __majorana_expectation(gamma: np.ndarray, idx) -> complex:
+        """<gamma_x> = (-i)^(|x|/2) Pf(Gamma|_x);  0 for odd |x|."""
+        if len(idx) % 2:
             return 0.0
-        return float(sign * pfaffian(gamma[np.ix_(idx, idx)]))
+        p = len(idx) // 2
+        return (-1j) ** p * (pfaffian(gamma[np.ix_(idx, idx)]) if p else 1.0)
+
+    def __pauli_expectation(self, gamma: np.ndarray, string: str) -> float:
+        phase, idx = self.pauli_to_majorana(string)
+        return float((phase * self.__majorana_expectation(gamma, idx)).real)
+
+    def expectation(self, gamma: np.ndarray, index, coupling) -> float:
+        """<O> for O = sum_t coupling[t] * P_t, with the same `index`/`coupling`
+        convention as ManyBodyQutip.qutip_class.SpinOperator, e.g.
+            index=[("x", 0, "x", 1), ("z", 3)], coupling=[1.0, 0.5]
+        One Pauli per site per term.
+        """
+        total = 0.0
+        for term, c in zip(index, coupling):
+            ops, sites = term[0::2], term[1::2]
+            if len(set(sites)) != len(sites):
+                raise ValueError(f"repeated site in term {term}")
+            string = ["I"] * self.l
+            for o, j in zip(ops, sites):
+                string[int(j)] = o.upper()
+            total += c * self.__pauli_expectation(gamma, "".join(string))
+        return float(total)
 
     # -----------------------------------------------------------------------
     # 7.  Non-stabilizerness: Majorana sampling (Algorithm 1)
@@ -468,6 +527,7 @@ class NambuIsing1D:
         """det of (D + Gamma)|_idx, D = 1 on the last n_unit entries of idx, 0 before."""
         if len(idx) == 0:
             return 1.0
+        # np.ix_ creates a submatrix with the indices idx X idx, which is what we want for the principal minor.
         sub = gamma[np.ix_(idx, idx)].copy()
         if n_unit:
             k = np.arange(len(idx) - n_unit, len(idx))
@@ -549,6 +609,50 @@ class NambuIsing1D:
         return dict(
             m_alpha=float(m_alpha), m_alpha_filtered=float(m_filt), err=float(err)
         )
+
+    def grape_energy_and_grad(
+        self, h_driver, h_target, dt, h_ref=(0.0, 1.0), w0=None, return_state=False
+    ):
+        """E = <psi_T| H_ref |psi_T> = tr(W1^dag H_ref W1) and EXACT dE/dh_driver_i,
+        dE/dh_target_i for the piecewise-constant propagator of `evolve`.
+        Forward: W1_{i+1} = U_i W1_i,  U_i = exp(-2i dt H_i).
+        Backward co-state: X_N = H_ref W1_N,  X_i = U_i^dag X_{i+1}.
+        dE/da_i = 2 Re tr(X_{i+1}^dag  dU_i/da  W1_i),  dU/da via Daleckii-Krein.
+        Cost O(nsteps * l^3), memory nsteps * 2l * l.
+        """
+        l, nsteps = self.l, len(h_driver)
+        if w0 is None:
+            _, w0 = self.diagonalize(h_driver[0], h_target[0])
+        w = np.asarray(w0, dtype=np.complex128)[:, :l]
+        # in this formalism every hamiltonian is a linear combination of the two building block hamiltonians, H_D and H_T
+        hr = self.hamiltonian(*h_ref)
+        # initialize the state the optimize the usage
+        ws = np.empty((nsteps + 1, 2 * l, l), dtype=np.complex128)
+        ws[0] = w
+        for i in range(nsteps):
+            ek, vk = self.diagonalize(h_driver[i], h_target[i])
+            # time evolution in the eigenbasis of the instantaneous hamiltonian
+            w = (vk * np.exp(-2j * dt * ek)) @ (vk.conj().T @ w)
+            ws[i + 1] = w
+        energy = float(np.real(np.trace(w.conj().T @ hr @ w)))
+
+        g_drv, g_tgt = np.zeros(nsteps), np.zeros(nsteps)
+        x = hr @ w
+        md, mt = self.m_driver, self.m_target
+        # time reversal
+        for i in reversed(range(nsteps)):
+            ek, vk = self.diagonalize(h_driver[i], h_target[i])
+            # this formula is from eq 147 paper "Taming quantum systems:
+            # A tutorial for using shortcuts-to-adiabaticity, quantum optimal control, & reinforcement learning" by Duncan and P. Poggi
+            f, phi = _dexp_weights(ek, dt)
+            xv, yv = vk.conj().T @ x, vk.conj().T @ ws[i]  # eigenbasis
+            k = xv.conj() @ yv.T  # (x^* y^T)_jk
+            g_drv[i] = 2.0 * np.real(np.sum((vk.conj().T @ md @ vk) * f * k))
+            g_tgt[i] = 2.0 * np.real(np.sum((vk.conj().T @ mt @ vk) * f * k))
+            x = vk @ (np.conj(phi)[:, None] * xv)  # X_i = U_i^dag X_{i+1}
+        if return_state:
+            return energy, g_drv, g_tgt, ws[-1]
+        return energy, g_drv, g_tgt
 
 
 # ---------------------------------------------------------------------------
