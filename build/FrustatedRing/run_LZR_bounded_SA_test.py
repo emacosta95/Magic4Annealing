@@ -1,18 +1,17 @@
+import time
+
 import numpy as np
 from scipy.sparse.linalg import eigsh, expm_multiply
-from src.annealing_utils import (
-    get_longitudinal_hamiltonian,
-    get_driver_hamiltonian,
-)
-from src.sparse_grape_method import SparseGRAPEModel, SimulatedAnnealingTrainer
-
-from src.hamiltonian_utils import frustrated_ring_jij_hz
-from src.utils import Z2SymmetricSector
-from src.jax_utils import SREJax
-from src.utils import EntanglementEntropy
 from tqdm import trange
-import sys
-import time
+
+from src.annealing_utils import (
+    get_driver_hamiltonian,
+    get_longitudinal_hamiltonian,
+)
+from src.hamiltonian_utils import frustrated_ring_jij_hz
+from src.jax_utils import SREJax
+from src.sparse_grape_method import SimulatedAnnealingTrainer, SparseGRAPEModel
+from src.utils import EntanglementEntropy, Z2SymmetricSector
 
 start = time.perf_counter()
 tag = "_bounded_SA_test"

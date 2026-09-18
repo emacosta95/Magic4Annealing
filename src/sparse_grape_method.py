@@ -90,11 +90,12 @@ interface as JaxSchedulerModel/JaxTrainer (see "Usage" above).
 -------------------------------------------------------------------------------
 """
 
+from typing import Optional
+
 import numpy as np
 import scipy.sparse as sp
+from scipy.optimize import dual_annealing, minimize
 from scipy.sparse.linalg import expm_multiply
-from scipy.optimize import minimize, dual_annealing
-from typing import Optional
 
 
 # ── softplus and its derivative ───────────────────────────────────────────────

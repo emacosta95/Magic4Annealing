@@ -1,3 +1,4 @@
+import sys
 import time
 
 import numpy as np
@@ -9,7 +10,6 @@ from src.annealing_utils import (
 from src.hamiltonian_utils import frustrated_ring_jij_hz
 from src.sparse_grape_method import SparseGRAPEModel, SparseGRAPETrainer
 from src.utils import Z2SymmetricSector
-import sys
 
 start = time.perf_counter()
 

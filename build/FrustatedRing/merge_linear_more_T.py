@@ -1,16 +1,20 @@
+import glob
+import os
+import re
 import sys
 
 import numpy as np
-import glob
-import re
-import os
 
 N = int(sys.argv[1])  # odd; N=9,11,13 feasible for full 2^N exact diagonalization
 
 # --- configuración ---
 directorio = "../../generated/FrustatedRing"
-patron_archivo = os.path.join(directorio, f"QuantumResourcesvsT_N={N}_T=*_linear_more_T.npz")
-archivo_salida = os.path.join(directorio, f"QuantumResourcesvsT_N={N}_linear_more_T.npz")
+patron_archivo = os.path.join(
+    directorio, f"QuantumResourcesvsT_N={N}_T=*_linear_more_T.npz"
+)
+archivo_salida = os.path.join(
+    directorio, f"QuantumResourcesvsT_N={N}_linear_more_T.npz"
+)
 
 # T_MIN, T_MAX, STEP se leen de variables de entorno (definidas en submit.sh)
 # con valores por defecto por si se ejecuta manualmente sin pasarlas

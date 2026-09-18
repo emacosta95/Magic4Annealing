@@ -1,12 +1,12 @@
-import numpy as np
-import scipy
-from scipy.optimize import minimize
+from functools import partial
 from typing import Optional
 
 import jax
 import jax.numpy as jnp
+import numpy as np
+import scipy
 from jax.scipy.linalg import expm
-from functools import partial
+from scipy.optimize import minimize
 
 # enable float64 — essential for physics accuracy
 jax.config.update("jax_enable_x64", True)

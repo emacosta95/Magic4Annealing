@@ -1,16 +1,14 @@
 from __future__ import annotations
-import scipy.sparse
+
 from itertools import product
+from typing import Dict, Optional
+
 import numpy as np
-from ManyBodyQutip.qutip_class import SpinOperator, SpinHamiltonian
-import numpy as np
-from typing import Dict
 import scipy
-from tqdm import trange
+import scipy.sparse
+from ManyBodyQutip.qutip_class import SpinOperator
 from scipy.linalg import eigh
 from scipy.sparse.linalg import eigsh
-from itertools import product
-from typing import Optional
 from tqdm import tqdm
 
 

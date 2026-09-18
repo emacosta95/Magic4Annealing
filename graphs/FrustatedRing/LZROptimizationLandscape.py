@@ -1,7 +1,4 @@
-import matplotlib.pyplot as plt
 import numpy as np
-from mpl_toolkits.axes_grid1 import make_axes_locatable
-from scipy.sparse.linalg import expm_multiply
 
 from src.annealing_utils import (
     get_driver_hamiltonian,
@@ -9,18 +6,18 @@ from src.annealing_utils import (
 )
 from src.hamiltonian_utils import frustrated_ring_jij_hz
 from src.jax_utils import SREJax
-from src.utils import EntanglementEntropy, Z2SymmetricSector
 from src.landscape_utils import (
     energy_fn,
-    max_magic_fn,
-    max_entanglement_fn,
     energy_landscape,
-    max_magic_landscape,
+    max_entanglement_fn,
     max_entanglement_landscape,
+    max_magic_fn,
+    max_magic_landscape,
     plot_energy_landscape,
-    plot_max_magic_landscape,
     plot_max_entanglement_landscape,
+    plot_max_magic_landscape,
 )
+from src.utils import EntanglementEntropy, Z2SymmetricSector
 
 
 def build_schedule(theta, t):
