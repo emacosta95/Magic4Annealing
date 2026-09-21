@@ -15,6 +15,7 @@ from src.sparse_grape_method import SimulatedAnnealingTrainer, SparseGRAPEModel
 from src.utils import EntanglementEntropy, Z2SymmetricSector
 
 start = time.perf_counter()
+tag = "_bounded_SA"
 
 T = int(sys.argv[1])
 
@@ -149,7 +150,9 @@ time_sub = times[::stride]
 # formateo consistente de T para evitar problemas de precisión en el nombre
 T_str = str(T)
 
-nombre_archivo = f"../../generated/FrustatedRing/QuantumResourcesvsT_N={N}_T={T_str}_LZR_bounded_SA.npz"
+nombre_archivo = (
+    f"../../generated/FrustatedRing/QuantumResourcesvsT_N={N}_T={T_str}_LZR{tag}.npz"
+)
 
 np.savez(
     nombre_archivo,
