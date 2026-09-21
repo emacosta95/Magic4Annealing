@@ -52,14 +52,13 @@ results from the two modules as interchangeable):
    hook for future work, not a working feature.
 """
 
+from typing import Callable, Dict, List, Optional
+
 import numpy as np
-from typing import List, Dict, Callable, Optional
-from scipy.linalg import expm
 import scipy
-from scipy.sparse.linalg import expm_multiply
-from scipy.optimize import minimize
 import scipy.sparse as sp
-from scipy.sparse.linalg import eigsh, expm_multiply
+from scipy.optimize import minimize
+from scipy.sparse.linalg import expm_multiply
 
 
 def configuration(res, energy, grad_energy):

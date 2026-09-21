@@ -1,24 +1,23 @@
-import numpy as np
-from scipy.sparse.linalg import eigsh, expm_multiply
-from src.annealing_utils import (
-    get_longitudinal_hamiltonian,
-    get_driver_hamiltonian,
-)
-from src.sparse_grape_method import SparseGRAPEModel, SparseGRAPETrainer
-
-from src.hamiltonian_utils import frustrated_ring_jij_hz
-from src.utils import Z2SymmetricSector
-from src.jax_utils import SREJax
-from src.utils import EntanglementEntropy
-from tqdm import trange
-import sys
 import time
 
+import numpy as np
+from scipy.sparse.linalg import eigsh, expm_multiply
+from tqdm import trange
+
+from src.annealing_utils import (
+    get_driver_hamiltonian,
+    get_longitudinal_hamiltonian,
+)
+from src.hamiltonian_utils import frustrated_ring_jij_hz
+from src.jax_utils import SREJax
+from src.sparse_grape_method import SimulatedAnnealingTrainer, SparseGRAPEModel
+from src.utils import EntanglementEntropy, Z2SymmetricSector
+
 start = time.perf_counter()
+tag = "_bounded_SA_test"
+T = 80
 
-T = int(sys.argv[1])
-
-N = int(sys.argv[2])  # odd; N=9,11,13 feasible for full 2^N exact diagonalization
+N = 7  # odd; N=9,11,13 feasible for full 2^N exact diagonalization
 J, JL, JR = 1.0, 0.5, 0.45
 
 jij, hz = frustrated_ring_jij_hz(N, J, JL, JR)
@@ -57,7 +56,7 @@ tau = T  # try a range of tau; the ring is expected to need LARGE tau
 # for a linear ramp to reach the ground state (exponential
 # slowdown at the AC) -- this is exactly the motivation for
 # optimal control / LZS below.
-time_steps = int(10 * tau)
+time_steps = int(100 * tau)
 times = np.linspace(0, tau, time_steps)
 delta_t = times[1] - times[0]
 
@@ -67,7 +66,7 @@ number_parameters = 2  # M=2 plateaus/arms -> n_params = 3*M+1 = 7, matching
 type = "LZS"
 
 best_result = None
-for i in range(50):
+for i in range(1):
     model_i = SparseGRAPEModel(
         initial_state=psi_init_s,
         target_hamiltonian=target_hamiltonian_s,
@@ -81,12 +80,12 @@ for i in range(50):
         random=True,
     )
 
-    trainer = SparseGRAPETrainer(model_i, verbose=True)
+    trainer = SimulatedAnnealingTrainer(model_i, seed=i, verbose=True)
     result = trainer.run()
     if best_result is None or result["energy"] < best_result["energy"]:
         best_result = result
         model = model_i
-
+        best_seed = i
 h_driver, h_target = model.get_driving()
 schedule = h_target
 
@@ -149,12 +148,13 @@ time_sub = times[::stride]
 T_str = str(T)
 
 nombre_archivo = (
-    f"../../generated/FrustatedRing/QuantumResourcesvsT_N={N}_T={T_str}_LZR.npz"
+    f"../../generated/FrustatedRing/QuantumResourcesvsT_N={N}_T={T_str}_LZR{tag}.npz"
 )
 
 np.savez(
     nombre_archivo,
     T=np.array([T]),  # guardamos T explícitamente también, por seguridad
+    seed=np.array([best_seed]),
     times=times,
     evo_energy=energy,
     e0=e0,

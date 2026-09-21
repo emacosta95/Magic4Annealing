@@ -1,3 +1,6 @@
+import os
+import re
+
 import numpy as np
 
 from src.annealing_utils import (
@@ -8,16 +11,45 @@ from src.hamiltonian_utils import frustrated_ring_jij_hz
 from src.jax_utils import SREJax
 from src.landscape_utils import (
     energy_fn,
-    energy_landscape,
+    energy_landscape_1d,
     max_entanglement_fn,
-    max_entanglement_landscape,
+    max_entanglement_landscape_1d,
     max_magic_fn,
-    max_magic_landscape,
-    plot_energy_landscape,
-    plot_max_entanglement_landscape,
-    plot_max_magic_landscape,
+    max_magic_landscape_1d,
+    plot_energy_landscape_1d,
+    plot_max_entanglement_landscape_1d,
+    plot_max_magic_landscape_1d,
 )
 from src.utils import EntanglementEntropy, Z2SymmetricSector
+
+
+def load_data(archivo_salida):
+    """
+    Lee el .npz combinado y devuelve un diccionario:
+    { T (int): {nombre_variable: array, ...}, ... }
+    """
+    data = np.load(archivo_salida)
+
+    patron = re.compile(r"^T=(\d+)_(.+)$")
+    resultado = {}
+
+    for clave in data.files:
+        match = patron.match(clave)
+        if not match:
+            print(
+                f"Aviso: clave '{clave}' no coincide con el patrón esperado, se omite."
+            )
+            continue
+
+        Ti = int(match.group(1))
+        nombre_variable = match.group(2)
+
+        if Ti not in resultado:
+            resultado[Ti] = {}
+
+        resultado[Ti][nombre_variable] = data[clave]
+
+    return resultado
 
 
 def build_schedule(theta, t):
@@ -35,53 +67,15 @@ def build_schedule(theta, t):
     raw_durations = parameters[:n_seg]
     raw_splateaus = parameters[n_seg : n_seg + M]
 
-    # # Step 1 — decode segment durations.
-    # # softplus(raw_durations) > 0 guarantees positive durations;
-    # # dividing by their sum and multiplying by tf renormalizes them
-    # # to add up to exactly the total annealing time.
-    # # ── softplus and its derivative ───────────────────────────────────────────────
-    # def _softplus(x: np.ndarray) -> np.ndarray:
-    #     """
-    #     log(1 + exp(x)), numerically stable.
-
-    #     Used to map an unconstrained real parameter onto a strictly-positive
-    #     number (e.g. a segment duration, which must be > 0). Computed as
-    #     log1p(exp(-|x|)) + max(x, 0) instead of the naive log(1+exp(x)) to
-    #     avoid overflow for large x.
-    #     """
-    #     return np.log1p(np.exp(-np.abs(x))) + np.maximum(x, 0)
-
-    # def _sigmoid(x: np.ndarray) -> np.ndarray:
-    #     """
-    #     Derivative of softplus = sigmoid(x) = 1 / (1 + exp(-x)).
-
-    #     Two independent uses in this file:
-    #     1. As d(softplus)/dx, needed by the chain rule wherever a
-    #         softplus-mapped parameter (e.g. a raw duration) is differentiated.
-    #     2. As a standalone squashing function 0->1, used to map the raw
-    #         LZS plateau-height parameters into the physical range s in [0, 1].
-    #     """
-    #     return 1.0 / (1.0 + np.exp(-x))
-
     D = raw_durations
     Ssum = D.sum()
     scaled_durations = D / Ssum * tf
     t_bounds = np.concatenate(([0.0], np.cumsum(scaled_durations)))
     t_bounds[-1] = tf  # guard against fp drift
 
-    # Step 3 — decode plateau heights via sigmoid into (0,1), and
-    # assemble the full waypoint list s_way = [0, plateau_1, ...,
-    # plateau_M, 1] (M+2 entries: the boundary values 0 and 1 are
-    # NOT free parameters).
     sig_S = raw_splateaus
     s_way = np.concatenate(([0.0], sig_S, [1.0]))  # (M+2,)
 
-    # Step 4 — walk through the 2M+1 alternating ramp/plateau
-    # segments, filling in s(t) and its Jacobian ds_dtheta segment
-    # by segment. ds_dtheta packs BOTH parameter blocks into one
-    # (n_params, nsteps) array: rows [0:n_seg] are duration
-    # sensitivities, rows [n_seg:n_seg+M] are plateau-height
-    # sensitivities.
     s = np.zeros_like(t)
 
     for seg in range(n_seg):
@@ -91,31 +85,22 @@ def build_schedule(theta, t):
         denom = (t1 - t0) if t1 > t0 else 1.0
 
         if seg % 2 == 0:
-            # Ramp segment (even index): linear interpolation
-            # between waypoint k and k+1, k = seg // 2.
             k = seg // 2
             s0, s1_ = s_way[k], s_way[k + 1]
             frac = (tm - t0) / denom
             s[mask] = s0 + (s1_ - s0) * frac
-
         else:
-            # Plateau segment (odd index): s is held constant at
-            # s_way[k], k = (seg+1)//2, for the whole segment — so
-            # there is no time-dependence and hence NO duration
-            # sensitivity (a plateau's height doesn't change if you
-            # stretch or shrink how long it lasts).
             k = (seg + 1) // 2
             s[mask] = s_way[k]
 
-    # h_driver = 1 - s, h_target = s (no ramp envelope for LZS), so
-    # their theta-Jacobians are just -ds_dtheta and +ds_dtheta.
     h_driver = 1.0 - s
     h_target = s
 
     return h_driver, h_target
 
 
-# theta1, theta2, theta3 = your three parameter vectors (1D arrays of the same size)
+# theta1, theta2 = your two parameter vectors (1D arrays of the same size),
+# assumed already defined elsewhere.
 # build_schedule = your function mapping theta -> schedule
 # times, delta_t, psi0, driver_hamiltonian_s, target_hamiltonian_s = your simulation setup
 
@@ -159,9 +144,35 @@ def max_entanglement_fn_wrapper(theta):
     )
 
 
-T = 120
+T = 80
+T2 = T
 
-N = 7  # odd; N=9,11,13 feasible for full 2^N exact diagonalization
+tag = "_bounded_SA"  # "_NoGrad", "_step_test", "_bounded", "_no_random" or ""
+tag_T = ""  # "_more_T" or ""
+N = 7
+
+tag2 = "_bounded"  # "_NoGrad", "_step_test", "_bounded", "_no_random" or ""
+tag_T2 = ""
+N2 = N
+
+data_LZR = load_data(
+    f"../../generated/FrustatedRing/QuantumResourcesvsT_N={N}_LZR"
+    + tag
+    + tag_T
+    + ".npz"
+)
+
+data_LZR2 = load_data(
+    f"../../generated/FrustatedRing/QuantumResourcesvsT_N={N2}_LZR"
+    + tag2
+    + tag_T2
+    + ".npz"
+)
+
+
+theta1 = data_LZR[T]["theta"][0]
+theta2 = data_LZR2[T2]["theta"][0]
+
 J, JL, JR = 1.0, 0.5, 0.45
 
 jij, hz = frustrated_ring_jij_hz(N, J, JL, JR)
@@ -208,45 +219,38 @@ number_parameters = 2  # M=2 plateaus/arms -> n_params = 3*M+1 = 7, matching
 # Werner et al.'s reduction from Cote et al.'s ~100-parameter
 # variational schedule down to 7 parameters
 type = "LZS"
-resolution = 25
-
-
-filename = f"../../generated/FrustatedRing/ParametersLZR_T={T}_N={N}.npz"
-data = np.load(filename)
-chosen_seeds = [7, 8, 9]
-
-theta1 = data["theta_list"][chosen_seeds[0]]
-theta2 = data["theta_list"][chosen_seeds[1]]
-theta3 = data["theta_list"][chosen_seeds[2]]
+resolution = 500
 
 sre = SREJax(n_qubits=nqubits - 1, batch_size=1000)
 entanglement_entropy = EntanglementEntropy(nqubits=nqubits, n_A=nqubits // 2)
 
-A, B, E, coords = energy_landscape(
-    theta1, theta2, theta3, energy_fn_wrapper, resolution=resolution
+a_vals, E, coords = energy_landscape_1d(
+    theta1, theta2, energy_fn_wrapper, resolution=resolution
 )
 
-A, B, max_magic, coords = max_magic_landscape(
-    theta1, theta2, theta3, max_magic_fn_wrapper, resolution=resolution
+_, max_magic, coords = max_magic_landscape_1d(
+    theta1, theta2, max_magic_fn_wrapper, resolution=resolution
 )
 
-A, B, max_entanglement, coords = max_entanglement_landscape(
-    theta1, theta2, theta3, max_entanglement_fn_wrapper, resolution=resolution
+_, max_entanglement, coords = max_entanglement_landscape_1d(
+    theta1, theta2, max_entanglement_fn_wrapper, resolution=resolution
 )
 
-filename_img_energy = f"../../images/FrustatedRing/FinalEnergyLandscapeLZR_T={T}_N={N}_{chosen_seeds[0]}_{chosen_seeds[1]}_{chosen_seeds[2]}.png"
-filename_img_max_entanglement = f"../../images/FrustatedRing/MaxEntanglementLZR_T={T}_N={N}_{chosen_seeds[0]}_{chosen_seeds[1]}_{chosen_seeds[2]}.png"
-filename_img_max_magic = f"../../images/FrustatedRing/MaxMagicLZR_T={T}_N={N}_{chosen_seeds[0]}_{chosen_seeds[1]}_{chosen_seeds[2]}.png"
+path = f"../../images/FrustatedRing/InterpolationGRAPEvsSA_T={T}_N={N}/"
+if not os.path.exists(path):
+    os.makedirs(path)
+
+filename_img_energy = f"{path}FinalEnergy.png"
+filename_img_max_entanglement = f"{path}MaxEntanglement.png"
+filename_img_max_magic = f"{path}MaxMagic.png"
 
 energies = {
     "theta1": energy_fn_wrapper(theta1),
     "theta2": energy_fn_wrapper(theta2),
-    "theta3": energy_fn_wrapper(theta3),
 }
 
-plot_energy_landscape(
-    A,
-    B,
+plot_energy_landscape_1d(
+    a_vals,
     E,
     coords,
     energies,
@@ -254,9 +258,8 @@ plot_energy_landscape(
     save_path=filename_img_energy,
 )
 
-plot_max_magic_landscape(
-    A,
-    B,
+plot_max_magic_landscape_1d(
+    a_vals,
     max_magic,
     coords,
     energies,
@@ -264,9 +267,8 @@ plot_max_magic_landscape(
     save_path=filename_img_max_magic,
 )
 
-plot_max_entanglement_landscape(
-    A,
-    B,
+plot_max_entanglement_landscape_1d(
+    a_vals,
     max_entanglement,
     coords,
     energies,

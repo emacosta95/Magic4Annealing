@@ -1,3 +1,6 @@
+import os
+import sys
+
 import numpy as np
 
 from src.annealing_utils import (
@@ -159,9 +162,21 @@ def max_entanglement_fn_wrapper(theta):
     )
 
 
-T = 120
+T = int(sys.argv[1])
 
-N = 7  # odd; N=9,11,13 feasible for full 2^N exact diagonalization
+N = int(sys.argv[2])  # odd; N=9,11,13 feasible for full 2^N exact diagonalization
+
+seed1 = int(sys.argv[3])
+
+seed2 = int(sys.argv[4])
+
+seed3 = int(sys.argv[5])
+k = int(sys.argv[6])
+
+chosen_seeds = [seed1, seed2, seed3]
+
+Tlist = [T + i * 10 for i in range(-2, 3)]
+Ti = Tlist[k]
 J, JL, JR = 1.0, 0.5, 0.45
 
 jij, hz = frustrated_ring_jij_hz(N, J, JL, JR)
@@ -195,7 +210,7 @@ psi_init_s = sector.project(psi_init_full)
 
 # ── time evolution parameters ─────────────────────────────────────────────────
 nlevels = 2
-tau = T  # try a range of tau; the ring is expected to need LARGE tau
+tau = Ti  # try a range of tau; the ring is expected to need LARGE tau
 # for a linear ramp to reach the ground state (exponential
 # slowdown at the AC) -- this is exactly the motivation for
 # optimal control / LZS below.
@@ -208,12 +223,11 @@ number_parameters = 2  # M=2 plateaus/arms -> n_params = 3*M+1 = 7, matching
 # Werner et al.'s reduction from Cote et al.'s ~100-parameter
 # variational schedule down to 7 parameters
 type = "LZS"
-resolution = 25
+resolution = 50
 
 
 filename = f"../../generated/FrustatedRing/ParametersLZR_T={T}_N={N}.npz"
 data = np.load(filename)
-chosen_seeds = [7, 8, 9]
 
 theta1 = data["theta_list"][chosen_seeds[0]]
 theta2 = data["theta_list"][chosen_seeds[1]]
@@ -234,9 +248,14 @@ A, B, max_entanglement, coords = max_entanglement_landscape(
     theta1, theta2, theta3, max_entanglement_fn_wrapper, resolution=resolution
 )
 
-filename_img_energy = f"../../images/FrustatedRing/FinalEnergyLandscapeLZR_T={T}_N={N}_{chosen_seeds[0]}_{chosen_seeds[1]}_{chosen_seeds[2]}.png"
-filename_img_max_entanglement = f"../../images/FrustatedRing/MaxEntanglementLZR_T={T}_N={N}_{chosen_seeds[0]}_{chosen_seeds[1]}_{chosen_seeds[2]}.png"
-filename_img_max_magic = f"../../images/FrustatedRing/MaxMagicLZR_T={T}_N={N}_{chosen_seeds[0]}_{chosen_seeds[1]}_{chosen_seeds[2]}.png"
+path = f"../../images/FrustatedRing/LandscapeEvolutionLZR_T={T}_N={N}_seeds={chosen_seeds[0]}_{chosen_seeds[1]}_{chosen_seeds[2]}"
+if not os.path.exists(path):
+    os.makedirs(path)
+
+
+filename_img_energy = f"{path}/EnergyLandscape_Ti={Ti}.png"
+filename_img_max_entanglement = f"{path}/MaxEntanglement_Ti={Ti}.png"
+filename_img_max_magic = f"{path}/MaxMagic_Ti={Ti}.png"
 
 energies = {
     "theta1": energy_fn_wrapper(theta1),
@@ -250,7 +269,7 @@ plot_energy_landscape(
     E,
     coords,
     energies,
-    title=f"Energy landscape T={T} N={N}",
+    title=f"Energy landscape T={Ti} N={N}",
     save_path=filename_img_energy,
 )
 
@@ -260,7 +279,7 @@ plot_max_magic_landscape(
     max_magic,
     coords,
     energies,
-    title=f"Max magic landscape T={T} N={N}",
+    title=f"Max magic landscape T={Ti} N={N}",
     save_path=filename_img_max_magic,
 )
 
@@ -270,6 +289,6 @@ plot_max_entanglement_landscape(
     max_entanglement,
     coords,
     energies,
-    title=f"Max entanglement landscape T={T} N={N}",
+    title=f"Max entanglement landscape T={Ti} N={N}",
     save_path=filename_img_max_entanglement,
 )

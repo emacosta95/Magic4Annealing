@@ -1,21 +1,21 @@
-import numpy as np
-from scipy.sparse.linalg import eigsh, expm_multiply
-from src.annealing_utils import (
-    get_longitudinal_hamiltonian,
-    get_driver_hamiltonian,
-)
-from src.sparse_grape_method import SparseGRAPEModel, SparseGRAPETrainer
-
-from src.hamiltonian_utils import frustrated_ring_jij_hz
-from src.utils import Z2SymmetricSector
-from src.jax_utils import SREJax
-from src.utils import EntanglementEntropy
-from tqdm import trange
 import sys
 import time
 
-start = time.perf_counter()
+import numpy as np
+from scipy.sparse.linalg import eigsh, expm_multiply
+from tqdm import trange
 
+from src.annealing_utils import (
+    get_driver_hamiltonian,
+    get_longitudinal_hamiltonian,
+)
+from src.hamiltonian_utils import frustrated_ring_jij_hz
+from src.jax_utils import SREJax
+from src.sparse_grape_method import SparseGRAPEModel, SparseGRAPETrainer
+from src.utils import EntanglementEntropy, Z2SymmetricSector
+
+start = time.perf_counter()
+tag = "_no_random"
 T = int(sys.argv[1])
 
 N = int(sys.argv[2])  # odd; N=9,11,13 feasible for full 2^N exact diagonalization
@@ -76,8 +76,8 @@ model = SparseGRAPEModel(
     number_of_parameters=number_parameters,
     nsteps=time_steps,
     type=type,
-    seed=6,
-    random=True,
+    seed=1,
+    random=False,
 )
 
 trainer = SparseGRAPETrainer(model, verbose=True)
@@ -89,7 +89,7 @@ schedule = h_target
 
 dim_s = driver_hamiltonian_s.shape[0]
 psi = psi_init_s.copy()
-
+theta = result["parameters"]
 spectrum = np.zeros((time_steps, nlevels))
 energy = np.zeros(time_steps)
 probabilities = np.zeros((time_steps, nlevels))
@@ -145,11 +145,14 @@ time_sub = times[::stride]
 # formateo consistente de T para evitar problemas de precisión en el nombre
 T_str = str(T)
 
-nombre_archivo = f"../../generated/FrustatedRing/QuantumResourcesvsT_N={N}_T={T_str}_LZR_step_test.npz"
+nombre_archivo = (
+    f"../../generated/FrustatedRing/QuantumResourcesvsT_N={N}_T={T_str}_LZR{tag}.npz"
+)
 
 np.savez(
     nombre_archivo,
     T=np.array([T]),  # guardamos T explícitamente también, por seguridad
+    theta=np.array([theta]),
     times=times,
     evo_energy=energy,
     e0=e0,

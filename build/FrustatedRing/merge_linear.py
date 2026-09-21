@@ -1,9 +1,9 @@
+import glob
+import os
+import re
 import sys
 
 import numpy as np
-import glob
-import re
-import os
 
 N = int(sys.argv[1])  # odd; N=9,11,13 feasible for full 2^N exact diagonalization
 

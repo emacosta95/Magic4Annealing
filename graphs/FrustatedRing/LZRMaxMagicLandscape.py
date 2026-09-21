@@ -1,3 +1,7 @@
+import os
+import sys
+from itertools import combinations
+
 import numpy as np
 
 from src.annealing_utils import (
@@ -8,16 +12,11 @@ from src.hamiltonian_utils import frustrated_ring_jij_hz
 from src.jax_utils import SREJax
 from src.landscape_utils import (
     energy_fn,
-    energy_landscape,
-    max_entanglement_fn,
-    max_entanglement_landscape,
     max_magic_fn,
     max_magic_landscape,
-    plot_energy_landscape,
-    plot_max_entanglement_landscape,
     plot_max_magic_landscape,
 )
-from src.utils import EntanglementEntropy, Z2SymmetricSector
+from src.utils import Z2SymmetricSector
 
 
 def build_schedule(theta, t):
@@ -145,23 +144,9 @@ def max_magic_fn_wrapper(theta):
     )
 
 
-def max_entanglement_fn_wrapper(theta):
-    return max_entanglement_fn(
-        theta,
-        build_schedule,
-        times,
-        delta_t,
-        psi_init_s,
-        sector,
-        entanglement_entropy,
-        driver_hamiltonian_s,
-        target_hamiltonian_s,
-    )
+T = int(sys.argv[1])
 
-
-T = 120
-
-N = 7  # odd; N=9,11,13 feasible for full 2^N exact diagonalization
+N = int(sys.argv[2])  # odd; N=9,11,13 feasible for full 2^N exact diagonalization
 J, JL, JR = 1.0, 0.5, 0.45
 
 jij, hz = frustrated_ring_jij_hz(N, J, JL, JR)
@@ -208,51 +193,35 @@ number_parameters = 2  # M=2 plateaus/arms -> n_params = 3*M+1 = 7, matching
 # Werner et al.'s reduction from Cote et al.'s ~100-parameter
 # variational schedule down to 7 parameters
 type = "LZS"
-resolution = 25
+resolution = 50
 
 
 filename = f"../../generated/FrustatedRing/ParametersLZR_T={T}_N={N}.npz"
 data = np.load(filename)
-chosen_seeds = [7, 8, 9]
+seed_combinations = np.array(list(combinations(range(10), 3)))
+chosen_seeds = seed_combinations[int(sys.argv[3])]
 
 theta1 = data["theta_list"][chosen_seeds[0]]
 theta2 = data["theta_list"][chosen_seeds[1]]
 theta3 = data["theta_list"][chosen_seeds[2]]
 
 sre = SREJax(n_qubits=nqubits - 1, batch_size=1000)
-entanglement_entropy = EntanglementEntropy(nqubits=nqubits, n_A=nqubits // 2)
-
-A, B, E, coords = energy_landscape(
-    theta1, theta2, theta3, energy_fn_wrapper, resolution=resolution
-)
 
 A, B, max_magic, coords = max_magic_landscape(
     theta1, theta2, theta3, max_magic_fn_wrapper, resolution=resolution
 )
 
-A, B, max_entanglement, coords = max_entanglement_landscape(
-    theta1, theta2, theta3, max_entanglement_fn_wrapper, resolution=resolution
-)
+path = f"../../images/FrustatedRing/MaxMagicLandscapeLZR_T={T}_N={N}"
+if not os.path.exists(path):
+    os.makedirs(path)
 
-filename_img_energy = f"../../images/FrustatedRing/FinalEnergyLandscapeLZR_T={T}_N={N}_{chosen_seeds[0]}_{chosen_seeds[1]}_{chosen_seeds[2]}.png"
-filename_img_max_entanglement = f"../../images/FrustatedRing/MaxEntanglementLZR_T={T}_N={N}_{chosen_seeds[0]}_{chosen_seeds[1]}_{chosen_seeds[2]}.png"
-filename_img_max_magic = f"../../images/FrustatedRing/MaxMagicLZR_T={T}_N={N}_{chosen_seeds[0]}_{chosen_seeds[1]}_{chosen_seeds[2]}.png"
+filename_img_max_magic = f"../../images/FrustatedRing/MaxMagicLandscapeLZR_T={T}_N={N}/{chosen_seeds[0]}_{chosen_seeds[1]}_{chosen_seeds[2]}.png"
 
 energies = {
     "theta1": energy_fn_wrapper(theta1),
     "theta2": energy_fn_wrapper(theta2),
     "theta3": energy_fn_wrapper(theta3),
 }
-
-plot_energy_landscape(
-    A,
-    B,
-    E,
-    coords,
-    energies,
-    title=f"Energy landscape T={T} N={N}",
-    save_path=filename_img_energy,
-)
 
 plot_max_magic_landscape(
     A,
@@ -262,14 +231,4 @@ plot_max_magic_landscape(
     energies,
     title=f"Max magic landscape T={T} N={N}",
     save_path=filename_img_max_magic,
-)
-
-plot_max_entanglement_landscape(
-    A,
-    B,
-    max_entanglement,
-    coords,
-    energies,
-    title=f"Max entanglement landscape T={T} N={N}",
-    save_path=filename_img_max_entanglement,
 )

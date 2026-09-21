@@ -1,12 +1,11 @@
 # ── scan_2d + plot_scan (only needed once — skip if already defined) ──
+import matplotlib.pyplot as plt
+import numpy as np
+from scipy.sparse.linalg import expm_multiply
 from tqdm import trange
 
 from src.jax_utils import SREJax
 from src.utils import EntanglementEntropy
-import numpy as np
-import matplotlib.pyplot as plt
-from tqdm import trange
-from scipy.sparse.linalg import expm_multiply
 
 
 def scan_2d(
