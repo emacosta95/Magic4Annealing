@@ -38,7 +38,7 @@ def load_data(archivo_salida):
 tag = "_SA"  # "_NoGrad", "_step_test", "_bounded", "_no_random" or ""
 tag_T = ""  # "_more_T" or ""
 N = 7
-nlevels = 2
+nlevels = 5
 data_linear = load_data(
     f"../../generated/FrustatedRing/QuantumResourcesvsT_N={N}_linear" + tag_T + ".npz"
 )
@@ -118,6 +118,7 @@ plt.plot(
 plt.xlabel("T")
 plt.ylabel("Minimum Gap")
 plt.legend()
+plt.grid()
 plt.show()
 
 plt.figure(figsize=(7, 5))
@@ -148,6 +149,7 @@ plt.plot(
 plt.xlabel("T")
 plt.ylabel("Maximum Entanglement")
 plt.legend()
+plt.grid()
 plt.show()
 
 plt.figure(figsize=(7, 5))
@@ -173,6 +175,7 @@ plt.plot(
 plt.xlabel("T")
 plt.ylabel("Maximum Magic")
 plt.legend()
+plt.grid()
 plt.show()
 
 plt.figure(figsize=(7, 5))
@@ -203,6 +206,7 @@ plt.plot(
 plt.xlabel("T")
 plt.ylabel("Entanglement Integral")
 plt.legend()
+plt.grid()
 plt.show()
 
 plt.figure(figsize=(7, 5))
@@ -233,21 +237,27 @@ plt.plot(
 plt.xlabel("T")
 plt.ylabel("Magic Integral")
 plt.legend()
+plt.grid()
 plt.show()
 
+theoretical_energy = -N + 2.45
 final_energies = [data_LZR[T]["evo_energy"][-1] for T in Tlist_LZR]
+errors = [final_energies[i] - theoretical_energy for i in range(len(final_energies))]
 plt.figure(figsize=(7, 5))
 plt.plot(
     Tlist_LZR,
-    final_energies,
+    errors,
     ".-",
     linewidth=1,
     markersize=4.5,
     label="LZR schedule",
 )
+# plt.xscale("log")
+plt.yscale("log")
 plt.xlabel("T")
-plt.ylabel("Energy at final time")
+plt.ylabel("Error in Energy at final time")
 plt.legend()
+plt.grid()
 plt.show()
 
 print(np.min(final_energies))

@@ -33,20 +33,21 @@ def load_data(archivo_salida):
     return resultado
 
 
-graph_type = "probs"  # "max_entang", "max_magic", "final_energy", "entang_int", "magic_int", "min_gap", "probs", "schedules", "spectrum", "entang_evo", "magic_evo"
-graph_type2 = "magic_evo"
-graph_type3 = "entang_evo"
+
+graph_type = "max_entang"  # "max_entang", "max_magic", "final_energy", "entang_int", "magic_int", "min_gap", "probs", "schedules", "spectrum", "entang_evo", "magic_evo"
+graph_type2 = "max_magic"  # "max_entang", "max_magic", "final_energy", "entang_int", "magic_int", "min_gap", "probs", "schedules", "spectrum", "entang_evo", "magic_evo"
+graph_type3 = "final_energy"
 
 nlevels = 2  # number of energy levels to plot in the spectrum
 
 T = 120
 T2 = T
 
-tag = "_bounded_SA"  # "_NoGrad", "_step_test", "_bounded", "_no_random" or ""
+tag = "_bounded"  # "_NoGrad", "_step_test", "_bounded", "_no_random" or ""
 tag_T = ""  # "_more_T" or ""
 N = 7
 
-tag2 = "_SA"  # "_NoGrad", "_step_test", "_bounded", "_no_random" or ""
+tag2 = "_bounded_SA"  # "_NoGrad", "_step_test", "_bounded", "_no_random" or ""
 tag_T2 = ""
 N2 = N
 
@@ -180,12 +181,18 @@ for Ti in Tlist_LZR2:
         (1 / Ti) * np.trapezoid(data_LZR2[Ti]["magic"], x=data_LZR2[Ti]["time_sub"])
     )
 
+theoretical_energy = -N + 2.45
 final_energies = [data_LZR[Ti]["evo_energy"][-1] for Ti in Tlist_LZR]
 final_energies2 = [data_LZR2[Ti]["evo_energy"][-1] for Ti in Tlist_LZR2]
+errors = [final_energies[i] - theoretical_energy for i in range(len(final_energies))]
+errors2 = [final_energies2[i] - theoretical_energy for i in range(len(final_energies2))]
 
 
 def comparation_plot(graph_type):
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 5))
+    for ax in (ax1, ax2):
+        ax.grid(True)
+
     if graph_type == "min_gap":
         ax1.plot(
             Tlist_linear,
@@ -229,27 +236,30 @@ def comparation_plot(graph_type):
     elif graph_type == "final_energy":
         ax1.plot(
             Tlist_LZR,
-            final_energies,
+            errors,
             ".-",
             linewidth=1,
             markersize=4.5,
             label="LZR schedule",
         )
+        ax1.set_yscale("log")
         ax1.set_xlabel("T")
-        ax1.set_ylabel("Energy at final time")
+        ax1.set_ylabel("Error in Energy at final time")
         ax1.legend()
+        
 
         ax2.plot(
             Tlist_LZR2,
-            final_energies2,
+            errors2,
             ".-",
             linewidth=1,
             markersize=4.5,
             label="LZR schedule",
         )
+        ax2.set_yscale("log")
         ax2.set_xlabel("T")
         ax2.legend()
-        fig.suptitle("Final Energy vs T")
+        fig.suptitle("Final Error in Energy vs T")
     elif graph_type == "max_entang":
         ax1.plot(
             Tlist_linear,
