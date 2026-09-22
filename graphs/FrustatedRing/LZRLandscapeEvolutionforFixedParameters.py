@@ -271,6 +271,8 @@ plot_energy_landscape(
     energies,
     title=f"Energy landscape T={Ti} N={N}",
     save_path=filename_img_energy,
+    vmin=-4.55,
+    vmax=-3.896,
 )
 
 plot_max_magic_landscape(
@@ -281,6 +283,8 @@ plot_max_magic_landscape(
     energies,
     title=f"Max magic landscape T={Ti} N={N}",
     save_path=filename_img_max_magic,
+    vmin=1.63,
+    vmax=2.55,
 )
 
 plot_max_entanglement_landscape(
@@ -291,4 +295,6 @@ plot_max_entanglement_landscape(
     energies,
     title=f"Max entanglement landscape T={Ti} N={N}",
     save_path=filename_img_max_entanglement,
+    vmin=0.49,
+    vmax=1.1,
 )

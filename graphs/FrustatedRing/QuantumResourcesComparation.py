@@ -34,8 +34,8 @@ def load_data(archivo_salida):
 
 
 
-graph_type = "max_entang"  # "max_entang", "max_magic", "final_energy", "entang_int", "magic_int", "min_gap", "probs", "schedules", "spectrum", "entang_evo", "magic_evo"
-graph_type2 = "max_magic"  # "max_entang", "max_magic", "final_energy", "entang_int", "magic_int", "min_gap", "probs", "schedules", "spectrum", "entang_evo", "magic_evo"
+graph_type = "entang_int"  # "max_entang", "max_magic", "final_energy", "entang_int", "magic_int", "min_gap", "probs", "schedules", "spectrum", "entang_evo", "magic_evo"
+graph_type2 = "magic_int"  # "max_entang", "max_magic", "final_energy", "entang_int", "magic_int", "min_gap", "probs", "schedules", "spectrum", "entang_evo", "magic_evo"
 graph_type3 = "final_energy"
 
 nlevels = 2  # number of energy levels to plot in the spectrum

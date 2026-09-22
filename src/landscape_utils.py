@@ -409,9 +409,41 @@ def max_entanglement_landscape_1d(
     return a_vals, E, coords
 
 
+def _make_contour(ax, A, B, Z, cmap, vmin, vmax):
+    """
+    Helper shared by the 2D landscape plots.
+    If vmin/vmax are both given, the colormap is fixed to that range
+    (levels are built to be evenly spaced within it, and values that fall
+    outside are clipped/shown via the colorbar's extend triangles).
+    Otherwise the color scale is computed automatically from the data,
+    exactly as before.
+    """
+    if vmin is not None and vmax is not None:
+        levels = np.linspace(vmin, vmax, 101)
+        cont = ax.contourf(
+            A, B, Z, levels=levels, cmap=cmap, vmin=vmin, vmax=vmax, extend="both"
+        )
+    else:
+        cont = ax.contourf(A, B, Z, levels=100, cmap=cmap)
+    return cont
+
+
 def plot_energy_landscape(
-    A, B, E, coords, energies, title="Energy landscape", save_path=None
+    A,
+    B,
+    E,
+    coords,
+    energies,
+    title="Energy landscape",
+    save_path=None,
+    vmin=None,
+    vmax=None,
 ):
+    """
+    vmin, vmax: optional, fix the color scale to this range (e.g. to compare
+    several plots on the same scale). If left as None, the scale is computed
+    automatically from the data, as before.
+    """
     # rango real de datos
     rango_a = A.max() - A.min()
     rango_b = B.max() - B.min()
@@ -427,7 +459,7 @@ def plot_energy_landscape(
         figsize=(ancho_heatmap + 1, alto_total)
     )  # +1 por la colorbar
 
-    cont = ax.contourf(A, B, E, levels=100, cmap="terrain")
+    cont = _make_contour(ax, A, B, E, "terrain", vmin, vmax)
 
     # colorbar con tamaño fijo relativo al heatmap, no a toda la figura
     divider = make_axes_locatable(ax)
@@ -537,8 +569,21 @@ def plot_energy_landscape_1d(
 
 
 def plot_max_magic_landscape(
-    A, B, max_magic, coords, energies, title="Max magic landscape", save_path=None
+    A,
+    B,
+    max_magic,
+    coords,
+    energies,
+    title="Max magic landscape",
+    save_path=None,
+    vmin=None,
+    vmax=None,
 ):
+    """
+    vmin, vmax: optional, fix the color scale to this range (e.g. to compare
+    several plots on the same scale). If left as None, the scale is computed
+    automatically from the data, as before.
+    """
     # rango real de datos
     rango_a = A.max() - A.min()
     rango_b = B.max() - B.min()
@@ -554,7 +599,7 @@ def plot_max_magic_landscape(
         figsize=(ancho_heatmap + 1, alto_total)
     )  # +1 por la colorbar
 
-    cont = ax.contourf(A, B, max_magic, levels=100, cmap="terrain")
+    cont = _make_contour(ax, A, B, max_magic, "terrain", vmin, vmax)
 
     # colorbar con tamaño fijo relativo al heatmap, no a toda la figura
     divider = make_axes_locatable(ax)
@@ -670,7 +715,14 @@ def plot_max_entanglement_landscape(
     energies,
     title="Max entanglement landscape",
     save_path=None,
+    vmin=None,
+    vmax=None,
 ):
+    """
+    vmin, vmax: optional, fix the color scale to this range (e.g. to compare
+    several plots on the same scale). If left as None, the scale is computed
+    automatically from the data, as before.
+    """
     # rango real de datos
     rango_a = A.max() - A.min()
     rango_b = B.max() - B.min()
@@ -686,7 +738,7 @@ def plot_max_entanglement_landscape(
         figsize=(ancho_heatmap + 1, alto_total)
     )  # +1 por la colorbar
 
-    cont = ax.contourf(A, B, max_entanglement, levels=100, cmap="terrain")
+    cont = _make_contour(ax, A, B, max_entanglement, "terrain", vmin, vmax)
 
     # colorbar con tamaño fijo relativo al heatmap, no a toda la figura
     divider = make_axes_locatable(ax)
