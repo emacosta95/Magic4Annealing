@@ -579,7 +579,12 @@ class NambuIsing1D:
         return xs, logp
 
     def sre(
-        self, w: np.ndarray, alpha: float = 2, n_samples: int = 2000, seed: int = 0
+        self,
+        w: np.ndarray,
+        alpha: float = 2,
+        n_samples: int = 2000,
+        seed: int = 0,
+        base: float = 2.0,
     ):
         """Stabilizer Renyi entropy of the Gaussian state w (Algorithm 1).
 
@@ -590,8 +595,9 @@ class NambuIsing1D:
                       (pi = 1/D each for a pure Gaussian state) removed and
                       pi renormalised; subtracted exactly from the estimate.
 
-        Returns dict(m_alpha, m_alpha_filtered, err), results in bits, err =
-        standard error of M_alpha (delta method).
+        Returns dict(m_alpha, m_alpha_filtered, err), in units of log(base)
+        (base=2 -> bits, base=np.e -> nats, same convention as
+        entanglement_entropy), err = standard error of M_alpha (delta method).
         Verified: N=7 frustrated ring after anneal, M2 exact 3.151 vs 3.148(32);
         filtered 3.344 vs 3.341.
         """
@@ -606,8 +612,11 @@ class NambuIsing1D:
         s_f = (mean - 2 * d ** (-alpha)) / (1 - 2 / d) ** alpha
         m_filt = np.log2(s_f) / (1 - alpha) - np.log2(d - 2)
         err = sem / (mean * abs(1 - alpha) * np.log(2))
+        scale = np.log(2.0) / np.log(base)  # bits -> units of log(base)
         return dict(
-            m_alpha=float(m_alpha), m_alpha_filtered=float(m_filt), err=float(err)
+            m_alpha=float(m_alpha * scale),
+            m_alpha_filtered=float(m_filt * scale),
+            err=float(err * scale),
         )
 
     def grape_energy_and_grad(
