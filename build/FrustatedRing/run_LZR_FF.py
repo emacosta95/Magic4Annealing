@@ -9,7 +9,7 @@ from src.free_fermions_utils import NambuIsing1D
 from src.sparse_grape_method import SparseGRAPETrainer
 
 start = time.perf_counter()
-tag = "_bounded_FF"
+tag = "_FF"
 T = int(sys.argv[1])
 
 N = int(sys.argv[2])  # odd; cost is O(N^3) per time step, no 2^N limit
@@ -51,7 +51,6 @@ for i in range(50):
         type=type,
         seed=i,
         random=True,
-        bounds_opt=True,
     )
 
     trainer = SparseGRAPETrainer(model_i, verbose=True)
