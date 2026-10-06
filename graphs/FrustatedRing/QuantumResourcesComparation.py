@@ -34,20 +34,22 @@ def load_data(archivo_salida):
 
 
 
-graph_type = "entang_int"  # "max_entang", "max_magic", "final_energy", "entang_int", "magic_int", "min_gap", "probs", "schedules", "spectrum", "entang_evo", "magic_evo"
-graph_type2 = "magic_int"  # "max_entang", "max_magic", "final_energy", "entang_int", "magic_int", "min_gap", "probs", "schedules", "spectrum", "entang_evo", "magic_evo"
-graph_type3 = "final_energy"
+
+graph_type = "schedules"  # "max_entang", "max_magic", "final_energy", "entang_int", "magic_int", "min_gap", "probs", "schedules", "spectrum", "entang_evo", "magic_evo"
+graph_type2 = "probs"  # "max_entang", "max_magic", "final_energy", "entang_int", "magic_int", "min_gap", "probs", "schedules", "spectrum", "entang_evo", "magic_evo"
+graph_type3 = "entang_evo"  # "max_entang", "max_magic", "final_energy", "entang_int", "magic_int", "min_gap", "probs", "schedules", "spectrum", "entang_evo", "magic_evo"
+graph_type4 = "magic_evo"
 
 nlevels = 2  # number of energy levels to plot in the spectrum
 
 T = 120
-T2 = T
+T2 = 150
 
 tag = "_bounded"  # "_NoGrad", "_step_test", "_bounded", "_no_random" or ""
 tag_T = ""  # "_more_T" or ""
 N = 7
 
-tag2 = "_bounded_SA"  # "_NoGrad", "_step_test", "_bounded", "_no_random" or ""
+tag2 = "_bounded"  # "_NoGrad", "_step_test", "_bounded", "_no_random" or ""
 tag_T2 = ""
 N2 = N
 
@@ -515,6 +517,8 @@ def comparation_plot(graph_type):
         ax2.legend()
         ax2.grid()
         fig.suptitle("Probabilities vs Time")
+        print(f"Final probabilities for T={T}: {[format(data_LZR[T]['p{}'.format(i)][-1], '.8f') for i in range(nlevels)]}")
+        print(f"Final probabilities for T2={T2}: {[format(data_LZR2[T2]['p{}'.format(i)][-1], '.8f') for i in range(nlevels)]}")
     elif graph_type == "schedules":
         ax1.plot(
             data_LZR[T]["times"],
@@ -734,3 +738,5 @@ if graph_type2 != "":
     comparation_plot(graph_type2)
 if graph_type3 != "":
     comparation_plot(graph_type3)
+if graph_type4 != "":
+    comparation_plot(graph_type4)

@@ -9,7 +9,7 @@ from src.free_fermions_utils import NambuIsing1D
 from src.sparse_grape_method import SparseGRAPETrainer
 
 start = time.perf_counter()
-tag = "_bounded_FF"
+tag = "_FF_bounded"  # for the filename, to distinguish from the unbounded version
 T = int(sys.argv[1])
 
 N = int(sys.argv[2])  # odd; cost is O(N^3) per time step, no 2^N limit
@@ -106,9 +106,7 @@ entanglement = []
 
 # base=np.e -> nats, the unit of the spin-basis scripts
 for k in trange(len(w1_history)):
-    sre_k = nambu.sre(
-        w1_history[k], alpha=2, n_samples=n_samples, seed=k, base=np.e
-    )
+    sre_k = nambu.sre(w1_history[k], alpha=2, n_samples=n_samples, seed=k, base=np.e)
     magic.append(sre_k["m_alpha"])
     magic_filtered.append(sre_k["m_alpha_filtered"])
     magic_err.append(sre_k["err"])
