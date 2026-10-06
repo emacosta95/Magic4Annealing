@@ -10,3 +10,5 @@ results/
 /.venv
 /magic4annealing.egg-info
 /images
+.ruff.toml
+CLAUDE.md
