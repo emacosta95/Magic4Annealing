@@ -412,7 +412,7 @@ class NambuIsing1D:
     # -----------------------------------------------------------------------
     # 6b. Entanglement entropy
     # -----------------------------------------------------------------------
-    def entanglement_entropy(self, w: np.ndarray, block, base: float = 2.0) -> float:
+    def entanglement_entropy(self, w: np.ndarray, block, base: float = np.e) -> float:
         """Von Neumann entropy S_A of a CONTIGUOUS block of spins (evolving state).
 
         The reduced state of a Gaussian state is Gaussian, with covariance
@@ -438,7 +438,12 @@ class NambuIsing1D:
         return float(-np.sum(p * np.log(p)) / np.log(base))
 
     def eigenstate_entanglement_entropy(
-        self, h_driver: float, h_target: float, block, level: int = 0, base: float = 2.0
+        self,
+        h_driver: float,
+        h_target: float,
+        block,
+        level: int = 0,
+        base: float = np.e,
     ) -> float:
         """S_A of the `level`-th PHYSICAL instantaneous eigenstate of H(h_driver, h_target)
         (level 0 = ground state), same ordering as levels() / level_probabilities().
@@ -584,7 +589,7 @@ class NambuIsing1D:
         alpha: float = 2,
         n_samples: int = 2000,
         seed: int = 0,
-        base: float = 2.0,
+        base: float = np.e,
     ):
         """Stabilizer Renyi entropy of the Gaussian state w (Algorithm 1).
 
@@ -596,10 +601,10 @@ class NambuIsing1D:
                       pi renormalised; subtracted exactly from the estimate.
 
         Returns dict(m_alpha, m_alpha_filtered, err), in units of log(base)
-        (base=2 -> bits, base=np.e -> nats, same convention as
+        (default base=np.e -> nats, base=2 -> bits, same convention as
         entanglement_entropy), err = standard error of M_alpha (delta method).
-        Verified: N=7 frustrated ring after anneal, M2 exact 3.151 vs 3.148(32);
-        filtered 3.344 vs 3.341.
+        Verified (in bits): N=7 frustrated ring after anneal, M2 exact 3.151 vs
+        3.148(32); filtered 3.344 vs 3.341.
         """
         gamma = self.majorana_covariance(w)
         l = self.l
@@ -694,7 +699,7 @@ def _even_sector(l):
     return par > 0
 
 
-def _exact_entropy(psi, l, block, base=2.0):
+def _exact_entropy(psi, l, block, base=np.e):
     """S of sites [start, stop) from a dense state vector (Schmidt values)."""
     start, stop = block
     keep = list(range(start, stop))
@@ -757,7 +762,7 @@ def _selftest_statics(l=6, seed=1):
     )
     res = model.sre(w, alpha=2, n_samples=4000)
     print(
-        f"M2  brute force={-np.log2(tot / 2**l):.5f}   "
+        f"M2  brute force={-np.log(tot / 2**l):.5f}   "
         f"Algorithm 1={res['m_alpha']:.5f} +- {res['err']:.5f}"
     )
 
