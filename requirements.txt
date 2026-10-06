@@ -22,6 +22,7 @@ dwave-neal>=0.6
 numba>=0.60
 joblib>=1.4
 tqdm>=4.66
+pfapack>=1.1
  
 # Custom packages (pinned to specific commits)
 ManyBodyQutip @ git+https://github.com/emacosta95/ManyBodySystemQutip.git@57bc12da3269216f96eb898a8eaa90a920ca3a79
