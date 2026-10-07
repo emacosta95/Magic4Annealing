@@ -1,10 +1,10 @@
 # ── scan_2d + plot_scan (only needed once — skip if already defined) ──
 import matplotlib.pyplot as plt
 import numpy as np
-from scipy.sparse.linalg import expm_multiply
 from tqdm import trange
 
 from src.jax_utils import SREJax
+from src.time_grid import midpoint_evolution, subsample_indices
 from src.utils import EntanglementEntropy
 
 
@@ -113,25 +113,27 @@ def propagate_trajectory(
     """
     Full time-resolved propagation for a given theta. Returns psi_history_full
     (n_sub_steps, 2^n) — the state lifted to the full space at each *sampled*
-    time step, plus the corresponding subsampled time indices.
+    point of the state grid model.time, plus the corresponding times.
 
-    time_subsample: keep every k-th step. SRE is not free (4^n Paulis per
-    call), so sampling every ~10-20 steps out of nsteps=500 is usually enough
-    to resolve the magic profile without recomputing all 500.
+    time_subsample: keep every k-th state (t = 0 and t = tf are always kept).
+    SRE is not free (4^n Paulis per call), so sampling every ~10-20 steps out
+    of nsteps=500 is usually enough to resolve the magic profile without
+    recomputing all 500.
     """
     model.forward_and_gradient(theta)  # syncs h_driver/h_target for this theta
-    h_driver, h_target = model.get_driving()
+    # control grid: one value per step, at the cell midpoints
+    h_driver, h_target = model.get_driving(grid="control")
     dt = model.dt
 
-    idx = np.arange(0, model.nsteps, time_subsample)
-    psi = psi_init_s.copy()
+    idx = subsample_indices(model.nsteps, time_subsample)
     psi_history_full = np.zeros((len(idx), sector.dim), dtype=complex)
 
     k = 0
-    for i in range(model.nsteps):
-        H_t = h_driver[i] * driver_hamiltonian_s + h_target[i] * target_hamiltonian_s
-        psi = expm_multiply(-1j * dt * H_t, psi)
-        if i in idx:
+    # psi is the state at model.time[i], i = 0..nsteps
+    for i, psi in midpoint_evolution(
+        psi_init_s, h_driver, h_target, dt, driver_hamiltonian_s, target_hamiltonian_s
+    ):
+        if k < len(idx) and i == idx[k]:
             psi_full = sector.lift(psi)
             psi_history_full[k] = psi_full / np.linalg.norm(psi_full)
             k += 1

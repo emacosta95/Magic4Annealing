@@ -172,10 +172,14 @@ class NambuIsing1D:
         """Piecewise-constant BdG propagation:  i dW/dt = 2 H_nambu(t) W.
 
         Args:
-            h_driver, h_target: [nsteps] schedules, exactly what
+            h_driver, h_target: [nsteps] schedules on the CONTROL grid (cell
+                                midpoints, src/time_grid.py), exactly what
                                 get_driving() returns (Schedule, SparseGRAPEModel).
-            w0:                 [2l,2l] initial Bogoliubov matrix; default is the
-                                ground state of H(t=0).
+            w0:                 [2l,2l] initial Bogoliubov matrix. ALWAYS pass it
+                                (e.g. diagonalize(1.0, 0.0)[1]): the default is
+                                the ground state of H(h_driver[0], h_target[0]),
+                                which on the control grid is H at t = dt/2, not
+                                the driver ground state.
             store_every:        keep a snapshot every n steps (0 = none), to
                                 save memory.
         Returns:
@@ -200,7 +204,9 @@ class NambuIsing1D:
         self, h_driver, h_target, store_every: int = 1, level: int = 0
     ):
         """Instantaneous PHYSICAL eigenstate `level` (0 = ground state) along a
-        schedule, at the same steps as evolve(..., store_every): i % store_every == 0.
+        schedule, at the points i % store_every == 0.  h_driver, h_target must be
+        on the STATE grid (get_driving(grid="state")), so that point i is the
+        instantaneous Hamiltonian at the time of the evolved state i.
 
         Adiabatic reference for the evolved snapshots.  Each state is a
         Bogoliubov vacuum W1 [2l, l] built with excited_vacuum, so past the
@@ -288,7 +294,9 @@ class NambuIsing1D:
         return e_vac + de, occs, (e, w)
 
     def spectrum_along_schedule(self, h_driver, h_target, n_levels: int = 10):
-        """Lowest n_levels physical levels at every schedule point, [nsteps, n_levels].
+        """Lowest n_levels physical levels at every schedule point, [len(h), n_levels].
+        Pass the schedule on the STATE grid (get_driving(grid="state")) to get
+        the spectrum at the times of the evolved states.
 
         Labels are sorted energies: they do NOT track a single adiabatic state
         through a crossing.
@@ -633,6 +641,8 @@ class NambuIsing1D:
         Backward co-state: X_N = H_ref W1_N,  X_i = U_i^dag X_{i+1}.
         dE/da_i = 2 Re tr(X_{i+1}^dag  dU_i/da  W1_i),  dU/da via Daleckii-Krein.
         Cost O(nsteps * l^3), memory nsteps * 2l * l.
+        h_driver, h_target are on the CONTROL grid; as in evolve, ALWAYS pass
+        w0 (the default is the ground state of H at the first control point).
         """
         l, nsteps = self.l, len(h_driver)
         if w0 is None:
@@ -785,13 +795,15 @@ def _selftest_dynamics():
         ht_s = _exact_ising(l, np.zeros(l), model.j_vec, model.pbc)
         nsteps = 600
         dt = tf / nsteps
-        s = np.linspace(0, 1, nsteps)
+        # linear ramp s = t/tf at the cell midpoints (midpoint rule)
+        s = (np.arange(nsteps) + 0.5) / nsteps
         hd, ht = 1 - s, s
 
         psi = np.linalg.eigh(hd_s)[1][:, 0].astype(complex)
         for i in range(nsteps):
             psi = expm(-1j * dt * (hd[i] * hd_s + ht[i] * ht_s)) @ psi
-        w, _ = model.evolve(hd, ht, dt)
+        # explicit driver ground state: hd[0], ht[0] is s(dt/2), not s = 0
+        w, _ = model.evolve(hd, ht, dt, w0=model.diagonalize(1.0, 0.0)[1])
 
         even = _even_sector(l)
         for sf in (0.3, 0.8, 1.0):

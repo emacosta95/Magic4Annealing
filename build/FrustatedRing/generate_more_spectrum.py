@@ -3,13 +3,14 @@ import sys
 import time
 
 import numpy as np
-from scipy.sparse.linalg import eigsh, expm_multiply
+from scipy.sparse.linalg import eigsh
 
 from src.annealing_utils import (
     get_driver_hamiltonian,
     get_longitudinal_hamiltonian,
 )
 from src.hamiltonian_utils import frustrated_ring_jij_hz
+from src.time_grid import midpoint_evolution, schedules_from_saved
 from src.utils import Z2SymmetricSector
 
 start = time.perf_counter()
@@ -54,17 +55,32 @@ driver_hamiltonian_s = sector.project(driver_hamiltonian)
 psi_init_s = sector.project(psi_init_full)
 
 for Ti in Tlist:
-    times = data[f"T={Ti}_times"]
-    delta_t = times[1] - times[0]
-    time_steps = len(times)
-    probabilities = np.zeros((time_steps, nlevels))
-    spectrum = np.zeros((time_steps, nlevels))
-    psi = psi_init_s.copy()
-    for i, t in enumerate(times):
-        hamiltonian_t = (1 - data[f"T={Ti}_schedule"][i]) * driver_hamiltonian_s + (
-            data[f"T={Ti}_schedule"][i]
+    # Schedule on both grids of the midpoint rule (src/time_grid.py). The
+    # propagation grid is always rebuilt from T; for files written with the old
+    # discretization s is re-evaluated from theta at the cell midpoints (the
+    # saved `schedule` is never used as if it were the control schedule).
+    grids = schedules_from_saved(data, prefix=f"T={Ti}_")
+    times, delta_t = grids["times"], grids["dt"]
+    schedule, schedule_ctrl = grids["schedule"], grids["schedule_ctrl"]
+    print(f"T={Ti}: schedule from {grids['source']}, nsteps={grids['nsteps']}")
+
+    n_times = len(times)
+    probabilities = np.zeros((n_times, nlevels))
+    spectrum = np.zeros((n_times, nlevels))
+    energy = np.zeros(n_times)
+    # psi is the state at times[i], i = 0..nsteps (i = 0: initial state)
+    for i, psi in midpoint_evolution(
+        psi_init_s,
+        1 - schedule_ctrl,
+        schedule_ctrl,
+        delta_t,
+        driver_hamiltonian_s,
+        target_hamiltonian_s,
+    ):
+        # instantaneous Hamiltonian at the time of the state, H(s(times[i]))
+        hamiltonian_t = (1 - schedule[i]) * driver_hamiltonian_s + (
+            schedule[i]
         ) * target_hamiltonian_s
-        psi = expm_multiply(-1j * delta_t * hamiltonian_t, psi)
 
         spectrum_t, eigenstates_t = eigsh(
             hamiltonian_t.astype(complex), which="SA", k=nlevels
@@ -78,10 +94,39 @@ for Ti in Tlist:
             np.einsum("i,ia->a", psi.conj(), eigenstates_raw)
             * np.einsum("i,ia->a", psi.conj(), eigenstates_raw).conj()
         ).real
+        energy[i] = np.real(np.vdot(psi, hamiltonian_t @ psi))
 
     for i in range(nlevels):
         data[f"T={Ti}_p{i}"] = probabilities[:, i]
         data[f"T={Ti}_e{i}"] = spectrum[:, i]
+
+    # Keep the file self-consistent: every full-resolution key of this T lives
+    # on the state grid just used. For a file written with the old
+    # discretization this REPLACES times/schedule/evo_energy/gap (old grid, one
+    # point less) by the new-convention ones and drops levels beyond `nlevels`
+    # that would be left on the old grid; the subsampled keys (magic,
+    # entanglement, ...) are untouched and stay paired with their own time_sub.
+    n_old = len(data[f"T={Ti}_times"])
+    if n_old != n_times:
+        stale = [
+            k
+            for k in data
+            if re.fullmatch(rf"T={Ti}_[pe]\d+", k) and len(data[k]) == n_old
+        ]
+        for key in stale:
+            del data[key]
+        print(f"  old-grid file upgraded to the midpoint grid; dropped {stale}")
+    data[f"T={Ti}_dt"] = np.array([delta_t])
+    data[f"T={Ti}_nsteps"] = np.array([grids["nsteps"]])
+    data[f"T={Ti}_times"] = times
+    data[f"T={Ti}_times_ctrl"] = grids["times_ctrl"]
+    data[f"T={Ti}_schedule"] = schedule
+    data[f"T={Ti}_schedule_ctrl"] = schedule_ctrl
+    data[f"T={Ti}_evo_energy"] = energy
+    if nlevels >= 2:
+        data[f"T={Ti}_gap"] = spectrum[:, 1] - spectrum[:, 0]
+    elif n_old != n_times:
+        data.pop(f"T={Ti}_gap", None)
 
 filename_tmp = (
     f"../../generated/FrustatedRing/QuantumResourcesvsT_N={N}_LZR" + tag + ".npz"

@@ -9,6 +9,7 @@ from src.annealing_utils import (
 )
 from src.hamiltonian_utils import frustrated_ring_jij_hz
 from src.sparse_grape_method import SparseGRAPEModel, SparseGRAPETrainer
+from src.time_grid import make_time_grids
 from src.utils import Z2SymmetricSector
 
 start = time.perf_counter()
@@ -54,9 +55,11 @@ tau = T  # try a range of tau; the ring is expected to need LARGE tau
 # for a linear ramp to reach the ground state (exponential
 # slowdown at the AC) -- this is exactly the motivation for
 # optimal control / LZS below.
-time_steps = int(100 * tau)
-times = np.linspace(0, tau, time_steps)
-delta_t = times[1] - times[0]
+time_steps = int(100 * tau)  # number of propagation steps
+# midpoint rule (src/time_grid.py): the states live on `times`
+# (time_steps + 1 points, 0..tau); the schedule that drives each step is
+# evaluated at the cell midpoints `times_ctrl`
+times, times_ctrl, delta_t = make_time_grids(tau, time_steps)
 
 number_parameters = 2  # M=2 plateaus/arms -> n_params = 3*M+1 = 7, matching
 # Werner et al.'s reduction from Cote et al.'s ~100-parameter

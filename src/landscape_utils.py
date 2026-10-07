@@ -1,50 +1,70 @@
 import matplotlib.pyplot as plt
 import numpy as np
 from mpl_toolkits.axes_grid1 import make_axes_locatable
-from scipy.sparse.linalg import expm_multiply
+
+from src.time_grid import midpoint_evolution
+
+# Time discretization: midpoint rule (src/time_grid.py). In every function
+# below `schedule_ctrl` is (h_driver, h_target) evaluated on the CONTROL grid
+# (cell midpoints, one value per propagation step) and `schedule` the same
+# pair on the STATE grid `times` (len(times) = nsteps + 1, times[-1] = tf).
+# Only schedule[1] = s(t) is used: H(t) = (1 - s) H_driver + s H_target.
+
+
+def _states(schedule_ctrl, delta_t, psi0, driver_hamiltonian_s, target_hamiltonian_s):
+    """States psi(times[k]), k = 0..nsteps, of the annealing driven by schedule_ctrl."""
+    s_ctrl = np.asarray(schedule_ctrl[1])
+    for _, psi in midpoint_evolution(
+        psi0, 1 - s_ctrl, s_ctrl, delta_t, driver_hamiltonian_s, target_hamiltonian_s
+    ):
+        yield psi
 
 
 def final_energy_annealing(
-    schedule, times, delta_t, psi0, driver_hamiltonian_s, target_hamiltonian_s
+    schedule_ctrl,
+    schedule,
+    delta_t,
+    psi0,
+    driver_hamiltonian_s,
+    target_hamiltonian_s,
 ):
     """
     Runs the annealing process and returns only the final energy.
-    schedule: array of the same length as `times`, giving s(t) at each step.
+    schedule_ctrl: s(t) at the cell midpoints, drives the evolution.
+    schedule: s(t) on the state grid; only its last value s(tf) is used, to
+              build the Hamiltonian the final energy is measured with.
     """
-    psi = psi0.copy()
+    for psi in _states(
+        schedule_ctrl, delta_t, psi0, driver_hamiltonian_s, target_hamiltonian_s
+    ):
+        pass
 
-    for i, t in enumerate(times):
-        s = schedule[1][i]
-        hamiltonian_t = (1 - s) * driver_hamiltonian_s + s * target_hamiltonian_s
-        psi = expm_multiply(-1j * delta_t * hamiltonian_t, psi)
-
-    # final energy: only need the Hamiltonian at the last time step
+    # final energy: only need the Hamiltonian at t = tf
+    s = schedule[1][-1]
+    hamiltonian_t = (1 - s) * driver_hamiltonian_s + s * target_hamiltonian_s
     final_energy = np.real(np.vdot(psi, hamiltonian_t @ psi))
     return final_energy
 
 
 def max_magic_annealing(
-    schedule, times, delta_t, psi0, sre, driver_hamiltonian_s, target_hamiltonian_s
+    schedule_ctrl, delta_t, psi0, sre, driver_hamiltonian_s, target_hamiltonian_s
 ):
     """
-    Runs the annealing process and returns only the final energy.
-    schedule: array of the same length as `times`, giving s(t) at each step.
+    Runs the annealing process and returns the maximum magic over the states
+    psi(times[k]), k = 0..nsteps.
+    schedule_ctrl: s(t) at the cell midpoints, drives the evolution.
     """
-    psi = psi0.copy()
-    max_magic = sre(psi)
-    for i, t in enumerate(times):
-        s = schedule[1][i]
-        hamiltonian_t = (1 - s) * driver_hamiltonian_s + s * target_hamiltonian_s
-        psi = expm_multiply(-1j * delta_t * hamiltonian_t, psi)
-        magic = sre(psi)
-        max_magic = max(max_magic, magic)
+    max_magic = -np.inf
+    for psi in _states(
+        schedule_ctrl, delta_t, psi0, driver_hamiltonian_s, target_hamiltonian_s
+    ):
+        max_magic = max(max_magic, sre(psi))
 
     return max_magic
 
 
 def max_entanglement_annealing(
-    schedule,
-    times,
+    schedule_ctrl,
     delta_t,
     psi0,
     sector,
@@ -53,17 +73,14 @@ def max_entanglement_annealing(
     target_hamiltonian_s,
 ):
     """
-    Runs the annealing process and returns only the final energy.
-    schedule: array of the same length as `times`, giving s(t) at each step.
+    Runs the annealing process and returns the maximum entanglement over the
+    states psi(times[k]), k = 0..nsteps.
+    schedule_ctrl: s(t) at the cell midpoints, drives the evolution.
     """
-
-    psi = psi0.copy()
-    psi_full = sector.lift(psi)
-    max_entanglement = entanglement_entropy.von_neumann(psi_full)
-    for i, t in enumerate(times):
-        s = schedule[1][i]
-        hamiltonian_t = (1 - s) * driver_hamiltonian_s + s * target_hamiltonian_s
-        psi = expm_multiply(-1j * delta_t * hamiltonian_t, psi)
+    max_entanglement = -np.inf
+    for psi in _states(
+        schedule_ctrl, delta_t, psi0, driver_hamiltonian_s, target_hamiltonian_s
+    ):
         psi_full = sector.lift(psi)
         entanglement = entanglement_entropy.von_neumann(psi_full)
         max_entanglement = max(max_entanglement, entanglement)
@@ -75,6 +92,7 @@ def energy_fn(
     theta,
     build_schedule,
     times,
+    times_ctrl,
     delta_t,
     psi0,
     driver_hamiltonian_s,
@@ -82,11 +100,19 @@ def energy_fn(
 ):
     """
     Maps a parameter vector theta -> schedule -> final energy.
-    build_schedule: function that, given theta and times, returns the schedule array.
+    build_schedule: function that, given theta and an array of times, returns
+                    the schedule (h_driver, h_target) on those times.
+    times, times_ctrl, delta_t: as returned by src.time_grid.make_time_grids.
     """
+    schedule_ctrl = build_schedule(theta, times_ctrl)
     schedule = build_schedule(theta, times)
     return final_energy_annealing(
-        schedule, times, delta_t, psi0, driver_hamiltonian_s, target_hamiltonian_s
+        schedule_ctrl,
+        schedule,
+        delta_t,
+        psi0,
+        driver_hamiltonian_s,
+        target_hamiltonian_s,
     )
 
 
@@ -94,6 +120,7 @@ def max_magic_fn(
     theta,
     build_schedule,
     times,
+    times_ctrl,
     delta_t,
     psi0,
     sre,
@@ -101,13 +128,13 @@ def max_magic_fn(
     target_hamiltonian_s,
 ):
     """
-    Maps a parameter vector theta -> schedule -> final energy.
-    build_schedule: function that, given theta and times, returns the schedule array.
+    Maps a parameter vector theta -> schedule -> maximum magic.
+    Same arguments as energy_fn (`times` is unused: the magic does not need
+    the instantaneous Hamiltonian; kept so the three *_fn share a signature).
     """
-    schedule = build_schedule(theta, times)
+    schedule_ctrl = build_schedule(theta, times_ctrl)
     return max_magic_annealing(
-        schedule,
-        times,
+        schedule_ctrl,
         delta_t,
         psi0,
         sre,
@@ -120,6 +147,7 @@ def max_entanglement_fn(
     theta,
     build_schedule,
     times,
+    times_ctrl,
     delta_t,
     psi0,
     sector,
@@ -128,13 +156,12 @@ def max_entanglement_fn(
     target_hamiltonian_s,
 ):
     """
-    Maps a parameter vector theta -> schedule -> final energy.
-    build_schedule: function that, given theta and times, returns the schedule array.
+    Maps a parameter vector theta -> schedule -> maximum entanglement.
+    Same arguments as energy_fn (`times` is unused, see max_magic_fn).
     """
-    schedule = build_schedule(theta, times)
+    schedule_ctrl = build_schedule(theta, times_ctrl)
     return max_entanglement_annealing(
-        schedule,
-        times,
+        schedule_ctrl,
         delta_t,
         psi0,
         sector,

@@ -8,6 +8,8 @@ import jax.numpy as jnp
 from jax.scipy.linalg import expm
 from functools import partial
 
+from src.time_grid import make_time_grids
+
 # enable float64 — essential for physics accuracy
 jax.config.update("jax_enable_x64", True)
 
@@ -31,6 +33,11 @@ class JaxSchedule:
     'power law'        : polynomial correction
     'LZS'              : M-plateau Landau-Zener-Stückelberg interference ansatz
                          (direct s(t) parametrization, mirrors schedule_utils.py)
+
+    Time discretization (midpoint rule, see src/time_grid.py): `nsteps` is the
+    number of propagation steps, self.time the state grid (nsteps + 1 points,
+    0..tf) and self.time_ctrl the control grid (cell midpoints) on which the
+    schedule driving each step is evaluated.
     """
 
     def __init__(
@@ -47,7 +54,8 @@ class JaxSchedule:
         self.nsteps = nsteps
         self.type = type
         self.mode = mode
-        self.time = np.linspace(0, tf, nsteps)
+        # state grid (nsteps + 1 points) and control grid (cell midpoints)
+        self.time, self.time_ctrl, self.dt = make_time_grids(tf, nsteps)
         self.number_parameters = number_of_parameters
         self.seed = seed
 
@@ -91,33 +99,16 @@ class JaxSchedule:
                 # exact harmonics: 2π k / tf  for k = 1, ..., dim
                 # applies to 'fourier', 'positive fourier', 'squared fourier'
                 self.omegas = np.pi * np.arange(1, dim + 1) / self.tf
-        # ── precompute jax constants (time, basis) ────────────────────────────
-        self._time_jax = jnp.array(self.time)
-
-        if self.type in _FOURIER_TYPES:
-            _omegas = jnp.array(self.omegas)
-            self._sin_basis = jnp.sin(
-                jnp.outer(_omegas, self._time_jax)
-            )  # (dim, nsteps)
-        elif self.type == "power law":
-            exponents = jnp.arange(1, dim + 1)[:, None]
-            self._pw_basis = (
-                self._time_jax[None, :] / tf
-            ) ** exponents  # (dim, nsteps)
+        # ── precompute jax constants (time, basis) on both grids ──────────────
+        self._basis = {
+            "control": self._build_basis(self.time_ctrl),
+            "state": self._build_basis(self.time),
+        }
 
         # ── softplus normalisation constant (for 'positive fourier') ─────────
         # softplus(1) ~ 1.3133 — used to rescale so zero-params -> linear ramp
         if self.type in _POSITIVE_TYPES:
             self._sp_norm = float(jax.nn.softplus(jnp.ones(1))[0])
-
-        elif self.type == "cumulative":
-            u = self.time / tf  # numpy, ok here
-            knots = np.linspace(0, 1, dim + 1)
-            idx = np.searchsorted(knots, u, side="right") - 1
-            idx = np.clip(idx, 0, dim - 1)
-            alpha = np.clip((u - knots[idx]) * dim, 0.0, 1.0)
-            self._cum_idx = jnp.array(idx, dtype=jnp.int32)
-            self._cum_alpha = jnp.array(alpha, dtype=jnp.float64)
 
         elif self.type == "LZS":
             # M = dim, n_seg = 2M+1. Nothing to precompute besides constants
@@ -127,15 +118,48 @@ class JaxSchedule:
             self._lzs_n_seg = 2 * dim + 1
 
     # ─────────────────────────────────────────────────────────────────────────
-    def get_driving(self) -> tuple:
-        """Returns (h_driver, h_target) as numpy arrays — drop-in replacement."""
-        h_driver_jax, h_target_jax = self._get_driving_jax(jnp.array(self.parameters))
+    def _build_basis(self, time: np.ndarray) -> dict:
+        """JAX time array and parameter-independent basis functions on `time`."""
+        dim = self.number_parameters
+        tf = self.tf
+        basis = {"t": jnp.array(time)}
+
+        if self.type in _FOURIER_TYPES:
+            _omegas = jnp.array(self.omegas)
+            basis["sin"] = jnp.sin(jnp.outer(_omegas, basis["t"]))  # (dim, len(time))
+        elif self.type == "power law":
+            exponents = jnp.arange(1, dim + 1)[:, None]
+            basis["pw"] = (basis["t"][None, :] / tf) ** exponents  # (dim, len(time))
+        elif self.type == "cumulative":
+            u = np.asarray(time) / tf  # numpy, ok here
+            knots = np.linspace(0, 1, dim + 1)
+            idx = np.searchsorted(knots, u, side="right") - 1
+            idx = np.clip(idx, 0, dim - 1)
+            alpha = np.clip((u - knots[idx]) * dim, 0.0, 1.0)
+            basis["cum_idx"] = jnp.array(idx, dtype=jnp.int32)
+            basis["cum_alpha"] = jnp.array(alpha, dtype=jnp.float64)
+        return basis
+
+    def get_driving(self, grid: str = "control") -> tuple:
+        """
+        Returns (h_driver, h_target) as numpy arrays — drop-in replacement.
+
+        grid = 'control' (default): at the cell midpoints self.time_ctrl, one
+            value per propagation step — what the propagator uses.
+        grid = 'state': on self.time (nsteps + 1 points, 0..tf), for plots and
+            for the instantaneous Hamiltonian of observables.
+        """
+        h_driver_jax, h_target_jax = self._get_driving_jax(
+            jnp.array(self.parameters), grid=grid
+        )
         return np.array(h_driver_jax), np.array(h_target_jax)
 
-    def _get_driving_jax(self, parameters: jnp.ndarray) -> tuple:
-        """Internal JAX version — fully differentiable."""
+    def _get_driving_jax(self, parameters: jnp.ndarray, grid: str = "control") -> tuple:
+        """Internal JAX version — fully differentiable (w.r.t. parameters;
+        `grid` is a static python argument)."""
         dim = self.number_parameters
-        t = self._time_jax
+        basis = self._basis[grid]
+        t = basis["t"]
         tf = self.tf
 
         # in _get_driving_jax — drop b coefficients, halve parameter count
@@ -145,8 +169,8 @@ class JaxSchedule:
             a_drv = parameters[:dim]
             a_tgt = parameters[dim : 2 * dim]
 
-            corr_driver = jnp.sum(a_drv[:, None] * self._sin_basis, axis=0)
-            corr_target = jnp.sum(a_tgt[:, None] * self._sin_basis, axis=0)
+            corr_driver = jnp.sum(a_drv[:, None] * basis["sin"], axis=0)
+            corr_target = jnp.sum(a_tgt[:, None] * basis["sin"], axis=0)
 
             h_driver = (1 - t / tf) * (1 + corr_driver)
             h_target = (t / tf) * (1 + corr_target)
@@ -163,11 +187,11 @@ class JaxSchedule:
             a_tgt = parameters[dim : 2 * dim]
 
             raw_driver = jnp.mean(
-                a_drv[:, None] * self._sin_basis,
+                a_drv[:, None] * basis["sin"],
                 axis=0,
             )
             raw_target = jnp.mean(
-                a_tgt[:, None] * self._sin_basis,
+                a_tgt[:, None] * basis["sin"],
                 axis=0,
             )
 
@@ -182,11 +206,11 @@ class JaxSchedule:
             b_tgt = parameters[3 * dim : 4 * dim]
 
             raw_driver = jnp.mean(
-                a_drv[:, None] * self._sin_basis + b_drv[:, None] * self._cos_basis,
+                a_drv[:, None] * basis["sin"] + b_drv[:, None] * basis["cos"],
                 axis=0,
             )
             raw_target = jnp.mean(
-                a_tgt[:, None] * self._sin_basis + b_tgt[:, None] * self._cos_basis,
+                a_tgt[:, None] * basis["sin"] + b_tgt[:, None] * basis["cos"],
                 axis=0,
             )
             # (1 + raw)^2 → always positive, =1 at zero params
@@ -203,18 +227,18 @@ class JaxSchedule:
             # ── target: monotone increasing, starts at 0 ──────────────────────────
             p_tgt = jax.nn.softmax(w_tgt)  # (dim,) positive, sums to 1
             knots_tgt = jnp.concatenate([jnp.zeros(1), jnp.cumsum(p_tgt)])  # (dim+1,)
-            h_left = knots_tgt[self._cum_idx]
-            h_right = knots_tgt[self._cum_idx + 1]
-            h_target = A_tgt * (h_left + self._cum_alpha * (h_right - h_left))
+            h_left = knots_tgt[basis["cum_idx"]]
+            h_right = knots_tgt[basis["cum_idx"] + 1]
+            h_target = A_tgt * (h_left + basis["cum_alpha"] * (h_right - h_left))
             # h_target(0) = 0 exactly, h_target(1) = A_tgt (free)
 
             # ── driver: monotone decreasing, ends at 0 ────────────────────────────
             p_drv = jax.nn.softmax(w_drv)
             p_drv_r = p_drv[::-1]  # reverse → decreasing cumsum
             knots_drv = jnp.concatenate([jnp.zeros(1), jnp.cumsum(p_drv_r)])  # (dim+1,)
-            h_left = knots_drv[self._cum_idx]
-            h_right = knots_drv[self._cum_idx + 1]
-            cum = h_left + self._cum_alpha * (h_right - h_left)
+            h_left = knots_drv[basis["cum_idx"]]
+            h_right = knots_drv[basis["cum_idx"] + 1]
+            cum = h_left + basis["cum_alpha"] * (h_right - h_left)
             h_driver = A_drv * (1.0 - cum)
             # h_driver(1) = 0 exactly, h_driver(0) = A_drv (free)
 
@@ -266,9 +290,9 @@ class JaxSchedule:
             h_target = s
 
         else:  # power law
-            corr_driver = jnp.mean(parameters[:dim, None] * self._pw_basis, axis=0)
+            corr_driver = jnp.mean(parameters[:dim, None] * basis["pw"], axis=0)
             corr_target = jnp.mean(
-                parameters[dim : 2 * dim, None] * self._pw_basis, axis=0
+                parameters[dim : 2 * dim, None] * basis["pw"], axis=0
             )
 
             h_driver = (1 - t / tf) * (1 + corr_driver)
@@ -358,7 +382,7 @@ class JaxSchedulerModel(JaxSchedule):
         self._H_target = jnp.array(target_hamiltonian.toarray(), dtype=jnp.complex128)
         self._H_ref = jnp.array(reference_hamiltonian.toarray(), dtype=jnp.complex128)
         self._psi_init = jnp.array(initial_state, dtype=jnp.complex128)
-        self._dt = jnp.float64(self.time[1] - self.time[0])
+        self._dt = jnp.float64(self.dt)
 
         # ── compile forward + gradient ────────────────────────────────────────
         self._forward_jax = jax.jit(self._build_forward())
@@ -394,6 +418,7 @@ class JaxSchedulerModel(JaxSchedule):
         get_driving = self._get_driving_jax
 
         def forward(parameters):
+            # control grid: step i uses the schedule at the midpoint of cell i
             h_driver, h_target = get_driving(parameters)
 
             # we shouldn't use this
@@ -500,7 +525,8 @@ class JaxTrainer:
 
         # final forward pass to sync model state
         self.model.forward(res.x)
-        h_driver, h_target = self.model.get_driving()
+        h_driver, h_target = self.model.get_driving(grid="state")
+        h_driver_ctrl, h_target_ctrl = self.model.get_driving(grid="control")
 
         if self.verbose:
             print(f"\nOptimization success : {res.success}")
@@ -515,9 +541,14 @@ class JaxTrainer:
             "energy": float(res.fun),
             "parameters": np.array(res.x),
             "psi": self.model.psi.copy(),
+            # schedule on the state grid `time` (plots, observables) ...
             "h_driver": h_driver,
             "h_target": h_target,
             "time": self.model.time.copy(),
+            # ... and at the cell midpoints `time_ctrl` (what was propagated)
+            "h_driver_ctrl": h_driver_ctrl,
+            "h_target_ctrl": h_target_ctrl,
+            "time_ctrl": self.model.time_ctrl.copy(),
             "history_energy": list(self.model.history),
             "history_parameters": [p.copy() for p in self.model.history_parameters],
             "history_drivings": self.model.history_drivings,

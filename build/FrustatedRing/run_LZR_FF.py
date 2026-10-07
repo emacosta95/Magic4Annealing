@@ -2,11 +2,16 @@ import sys
 import time
 
 import numpy as np
-from tqdm import trange
+from tqdm import tqdm
 
 from src.free_fermions_grape_method import NambuGRAPEModel
 from src.free_fermions_utils import NambuIsing1D
 from src.sparse_grape_method import SparseGRAPETrainer
+from src.time_grid import (
+    make_time_grids,
+    nambu_midpoint_evolution,
+    subsample_indices,
+)
 
 start = time.perf_counter()
 tag = "_FF"
@@ -32,9 +37,11 @@ tau = T  # try a range of tau; the ring is expected to need LARGE tau
 # for a linear ramp to reach the ground state (exponential
 # slowdown at the AC) -- this is exactly the motivation for
 # optimal control / LZS below.
-time_steps = int(100 * tau)
-times = np.linspace(0, tau, time_steps)
-delta_t = times[1] - times[0]
+time_steps = int(100 * tau)  # number of propagation steps
+# midpoint rule (src/time_grid.py): the states live on `times`
+# (time_steps + 1 points, 0..tau); the schedule that drives each step is
+# evaluated at the cell midpoints `times_ctrl`
+times, times_ctrl, delta_t = make_time_grids(tau, time_steps)
 
 number_parameters = 2  # M=2 plateaus/arms -> n_params = 3*M+1 = 7, matching
 # Werner et al.'s reduction from Cote et al.'s ~100-parameter
@@ -60,8 +67,10 @@ for i in range(200):
         model = model_i
         best_seed = i
 
-h_driver, h_target = model.get_driving()
-schedule = h_target
+# s(t) at the cell midpoints (what the propagator uses) and on the state
+# grid (instantaneous Hamiltonian of the observables, plots)
+schedule_ctrl = model.get_driving(grid="control")[1]
+schedule = model.get_driving(grid="state")[1]
 
 theta = best_result["parameters"]
 
@@ -69,18 +78,23 @@ theta = best_result["parameters"]
 stride = max(1, 10)
 n_samples = 1000  # Majorana samples per SRE estimate (statistical error ~ 1/sqrt)
 
-spectrum = np.zeros((time_steps, nlevels))
-energy = np.zeros(time_steps)
-probabilities = np.zeros((time_steps, nlevels))
-# only the Bogoliubov vacuum W1 [2N, N] at the subsampled steps is kept
-w1_history = np.zeros(
-    (len(range(0, time_steps, stride)), 2 * nqubits, nqubits), dtype=complex
-)
+n_times = len(times)  # time_steps + 1 states: t = 0, ..., tau
+idx_sub = subsample_indices(time_steps, stride)  # includes t = 0 and t = tau
+sub_position = {int(i): k for k, i in enumerate(idx_sub)}
 
-w = w_init
-for i, t in enumerate(times):
+spectrum = np.zeros((n_times, nlevels))
+energy = np.zeros(n_times)
+probabilities = np.zeros((n_times, nlevels))
+# only the Bogoliubov vacuum W1 [2N, N] at the subsampled steps is kept
+w1_history = np.zeros((len(idx_sub), 2 * nqubits, nqubits), dtype=complex)
+
+# w is the Bogoliubov matrix at times[i], i = 0..time_steps (i = 0: w_init,
+# passed explicitly: the first control value is s(dt/2), not s = 0)
+for i, w in nambu_midpoint_evolution(
+    nambu, w_init, 1 - schedule_ctrl, schedule_ctrl, delta_t
+):
+    # instantaneous Hamiltonian at the time of the state, H(s(times[i]))
     h_driver_t, h_target_t = 1 - schedule[i], schedule[i]
-    w, _ = nambu.evolve([h_driver_t], [h_target_t], delta_t, w0=w)
     w1 = w[:, :nqubits]
 
     # lowest physical levels (even sector) and their populations
@@ -89,8 +103,8 @@ for i, t in enumerate(times):
     )
     hamiltonian_t = nambu.hamiltonian(h_driver_t, h_target_t)
     energy[i] = np.real(np.trace(w1.conj().T @ hamiltonian_t @ w1))
-    if i % stride == 0:
-        w1_history[i // stride] = w1
+    if i in sub_position:
+        w1_history[sub_position[i]] = w1
 
 e0 = spectrum[:, 0]
 e1 = spectrum[:, 1]
@@ -104,7 +118,7 @@ magic_err = []
 entanglement = []
 
 # base=np.e -> nats, the unit of the spin-basis scripts
-for k in trange(len(w1_history)):
+for k in tqdm(range(len(w1_history))):
     sre_k = nambu.sre(w1_history[k], alpha=2, n_samples=n_samples, seed=k, base=np.e)
     magic.append(sre_k["m_alpha"])
     magic_filtered.append(sre_k["m_alpha_filtered"])
@@ -114,7 +128,7 @@ for k in trange(len(w1_history)):
     )
 
 
-time_sub = times[::stride]
+time_sub = times[idx_sub]
 
 
 # formateo consistente de T para evitar problemas de precisión en el nombre
@@ -129,12 +143,16 @@ np.savez(
     T=np.array([T]),  # guardamos T explícitamente también, por seguridad
     seed=np.array([best_seed]),
     theta=np.array([theta]),
-    times=times,
+    dt=np.array([delta_t]),
+    nsteps=np.array([time_steps]),
+    times=times,  # state grid: every time-resolved observable below
+    times_ctrl=times_ctrl,  # cell midpoints: where schedule_ctrl is sampled
     evo_energy=energy,
     e0=e0,
     e1=e1,
     gap=gap,
-    schedule=schedule,
+    schedule=schedule,  # s on `times` (plots, spectrum)
+    schedule_ctrl=schedule_ctrl,  # s on `times_ctrl` (what was propagated)
     p0=p0,
     p1=p1,
     time_sub=time_sub,
