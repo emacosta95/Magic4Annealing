@@ -32,7 +32,7 @@ tau = T  # try a range of tau; the ring is expected to need LARGE tau
 # for a linear ramp to reach the ground state (exponential
 # slowdown at the AC) -- this is exactly the motivation for
 # optimal control / LZS below.
-time_steps = int(10 * tau)
+time_steps = int(100 * tau)
 times = np.linspace(0, tau, time_steps)
 delta_t = times[1] - times[0]
 
@@ -42,7 +42,7 @@ number_parameters = 2  # M=2 plateaus/arms -> n_params = 3*M+1 = 7, matching
 type = "LZS"
 
 best_result = None
-for i in range(50):
+for i in range(200):
     model_i = NambuGRAPEModel(
         nambu,
         tf=tau,
