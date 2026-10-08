@@ -23,6 +23,7 @@ numba>=0.60
 joblib>=1.4
 tqdm>=4.66
 pfapack>=1.1
+imageio-ffmpeg>=0.5  # ffmpeg binary for the matplotlib mp4 animations
  
 # Custom packages (pinned to specific commits)
 ManyBodyQutip @ git+https://github.com/emacosta95/ManyBodySystemQutip.git@57bc12da3269216f96eb898a8eaa90a920ca3a79
