@@ -1,11 +1,13 @@
 import sys
 import time
+from functools import partial
 
 import numpy as np
 from tqdm import tqdm
 
 from src.free_fermions_grape_method import NambuGRAPEModel
 from src.free_fermions_utils import NambuIsing1D
+from src.parallel import available_cpus, best_of_seeds, make_pool
 from src.sparse_grape_method import SparseGRAPETrainer
 from src.time_grid import (
     make_time_grids,
@@ -17,7 +19,10 @@ start = time.perf_counter()
 
 # usage: python run_LZR_FF_bounded_ws.py T0 N T_MIN T_MAX STEP
 # T0 is the only T optimized from random initial points; every other T of
-# range(T_MIN, T_MAX + 1, STEP) starts from the optimum of its neighbour
+# range(T_MIN, T_MAX + 1, STEP) starts from the optimum of its neighbour.
+# The random initial points of T0 are spread over all the cores of the job;
+# then the two branches (T < T0 and T > T0) run in two processes at the same
+# time.
 T0 = int(sys.argv[1])
 N = int(sys.argv[2])  # odd; cost is O(N^3) per time step, no 2^N limit
 T_MIN = int(sys.argv[3])
@@ -80,19 +85,29 @@ def build_model(T, seed=0, random=False):
     )
 
 
-def optimize_cold(T):
-    """Usual optimization: best of 200 random initial points."""
-    best_result = None
-    for i in range(200):
-        model_i = build_model(T, seed=i, random=True)
+def optimize_seed(T, seed):
+    """One optimization from the random initial point of `seed`, run in a
+    worker process (src/parallel.py). Returns only (energy, theta), all that
+    is needed to keep the best one. verbose=False: the per-iteration output
+    of many simultaneous optimizations would be unreadable (and the histories
+    it stores are not used)."""
+    model = build_model(T, seed=seed, random=True)
 
-        trainer = SparseGRAPETrainer(model_i, verbose=True)
-        result = trainer.run()
-        if best_result is None or result["energy"] < best_result["energy"]:
-            best_result = result
-            model = model_i
-            best_seed = i
-    return model, best_result["parameters"], best_seed
+    trainer = SparseGRAPETrainer(model, verbose=False)
+    result = trainer.run()
+    return result["energy"], result["parameters"]
+
+
+def optimize_cold(T, n_workers):
+    """Usual optimization: best of 200 random initial points, one process per
+    initial point, n_workers at a time."""
+    best_seed, _, theta = best_of_seeds(
+        partial(optimize_seed, T), range(200), n_workers
+    )
+
+    model = build_model(T)
+    model.load(theta)
+    return model, theta, best_seed
 
 
 def optimize_warm(T, theta_init):
@@ -214,33 +229,44 @@ def evaluate_and_save(T, model, theta, seed):
     print(f"Guardado: {nombre_archivo}")
 
 
-def run_warm(T, theta_init):
+def run_warm(T, theta_init, seed):
     """Warm-started T: optimize, write its file and return only theta, the
     one thing the next T of the branch needs."""
     model, theta = optimize_warm(T, theta_init)
-    evaluate_and_save(T, model, theta, best_seed)
+    evaluate_and_save(T, model, theta, seed)
     return theta
 
 
-# ── T0: usual optimization ────────────────────────────────────────────────────
-model, theta_0, best_seed = optimize_cold(T0)
-evaluate_and_save(T0, model, theta_0, best_seed)
-del model
+def run_branch(T_branch, theta, seed):
+    """One branch of the warm start: the T of T_branch in the given order,
+    each one starting from the optimum of the previous one (theta: optimum
+    of T0). All that is kept between two T is that theta."""
+    for T in T_branch:
+        theta = run_warm(T, theta, seed)
 
-# ── warm start: T0 - STEP, T0 + STEP, T0 - 2*STEP, ... ────────────────────────
-# the two branches are advanced alternately; all that is kept in memory
-# between two T is the last theta of each branch
-i_0 = T_list.index(T0)
-theta_down = theta_0
-theta_up = theta_0
-for k in range(1, max(i_0, len(T_list) - 1 - i_0) + 1):
-    if i_0 - k >= 0:
-        theta_down = run_warm(T_list[i_0 - k], theta_down)
-    if i_0 + k < len(T_list):
-        theta_up = run_warm(T_list[i_0 + k], theta_up)
 
-end = time.perf_counter()
+# the guard is needed by the worker processes: they import this file again
+# (everything above) and must not repeat what follows
+if __name__ == "__main__":
+    n_cpus = available_cpus()  # cores given to the job
 
-elapsed = end - start
-print("Completed!! ")
-print(f"Elapsed time: {elapsed:.2f} seconds")
+    # ── T0: usual optimization ────────────────────────────────────────────────
+    model, theta_0, best_seed = optimize_cold(T0, n_cpus)
+    evaluate_and_save(T0, model, theta_0, best_seed)
+    del model
+
+    # ── warm start: T0 - STEP, T0 - 2*STEP, ... and T0 + STEP, ... ────────────
+    # the two branches only share theta_0, so each one runs in its own process
+    i_0 = T_list.index(T0)
+    branches = [b for b in (T_list[:i_0][::-1], T_list[i_0 + 1 :]) if b]
+
+    with make_pool(2, blas_threads=max(1, n_cpus // 2)) as pool:
+        futures = [pool.submit(run_branch, b, theta_0, best_seed) for b in branches]
+        for future in futures:
+            future.result()  # re-raises here whatever failed in the branch
+
+    end = time.perf_counter()
+
+    elapsed = end - start
+    print("Completed!! ")
+    print(f"Elapsed time: {elapsed:.2f} seconds")

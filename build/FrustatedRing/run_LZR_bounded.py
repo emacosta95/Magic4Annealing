@@ -10,7 +10,7 @@ from src.annealing_utils import (
     get_longitudinal_hamiltonian,
 )
 from src.hamiltonian_utils import frustrated_ring_jij_hz
-from src.jax_utils import SREJax
+from src.parallel import best_of_seeds
 from src.sparse_grape_method import SparseGRAPEModel, SparseGRAPETrainer
 from src.time_grid import make_time_grids, midpoint_evolution, subsample_indices
 from src.utils import EntanglementEntropy, Z2SymmetricSector
@@ -69,9 +69,9 @@ number_parameters = 2  # M=2 plateaus/arms -> n_params = 3*M+1 = 7, matching
 # variational schedule down to 7 parameters
 type = "LZS"
 
-best_result = None
-for i in range(50):
-    model_i = SparseGRAPEModel(
+
+def build_model(seed=0, random=False):
+    return SparseGRAPEModel(
         initial_state=psi_init_s,
         target_hamiltonian=target_hamiltonian_s,
         initial_hamiltonian=driver_hamiltonian_s,
@@ -80,120 +80,136 @@ for i in range(50):
         number_of_parameters=number_parameters,
         nsteps=time_steps,
         type=type,
-        seed=i,
-        random=True,
+        seed=seed,
+        random=random,
         bounds_opt=True,
     )
 
-    trainer = SparseGRAPETrainer(model_i, verbose=True)
+
+def optimize_seed(seed):
+    """One optimization from the random initial point of `seed`, run in a
+    worker process (src/parallel.py). Returns only (energy, theta), all that
+    is needed to keep the best one. verbose=False: the per-iteration output
+    of many simultaneous optimizations would be unreadable (and the histories
+    it stores are not used)."""
+    model = build_model(seed=seed, random=True)
+
+    trainer = SparseGRAPETrainer(model, verbose=False)
     result = trainer.run()
-    if best_result is None or result["energy"] < best_result["energy"]:
-        best_result = result
-        model = model_i
-        best_seed = i
-
-# s(t) at the cell midpoints (what the propagator uses) and on the state
-# grid (instantaneous Hamiltonian of the observables, plots)
-schedule_ctrl = model.get_driving(grid="control")[1]
-schedule = model.get_driving(grid="state")[1]
-
-dim_s = driver_hamiltonian_s.shape[0]
-theta = best_result["parameters"]
-
-n_times = len(times)  # time_steps + 1 states: t = 0, ..., tau
-spectrum = np.zeros((n_times, nlevels))
-energy = np.zeros(n_times)
-probabilities = np.zeros((n_times, nlevels))
-psi_history_s = np.zeros((n_times, dim_s), dtype=complex)
-eigenstates_history_s = np.zeros((n_times, dim_s, nlevels), dtype=complex)
-
-sre = SREJax(n_qubits=nqubits - 1, batch_size=1000)
-entanglement_entropy = EntanglementEntropy(nqubits=nqubits, n_A=nqubits // 2)
+    return result["energy"], result["parameters"]
 
 
-# psi is the state at times[i], i = 0..time_steps (i = 0: initial state)
-for i, psi in midpoint_evolution(
-    psi_init_s,
-    1 - schedule_ctrl,
-    schedule_ctrl,
-    delta_t,
-    driver_hamiltonian_s,
-    target_hamiltonian_s,
-):
-    # instantaneous Hamiltonian at the time of the state, H(s(times[i]))
-    hamiltonian_t = (1 - schedule[i]) * driver_hamiltonian_s + (
-        schedule[i]
-    ) * target_hamiltonian_s
+# the guard is needed by the worker processes: they import this file again
+# (everything above) and must not repeat what follows
+if __name__ == "__main__":
+    # imported here: the workers only optimize and do not need JAX
+    from src.jax_utils import SREJax
 
-    spectrum_t, eigenstates_t = eigsh(
-        hamiltonian_t.astype(complex), which="SA", k=nlevels
+    # best of 50 random initial points, one process per initial point,
+    # spread over all the cores of the job
+    best_seed, _, theta = best_of_seeds(optimize_seed, range(50))
+    model = build_model()
+    model.load(theta)
+
+    # s(t) at the cell midpoints (what the propagator uses) and on the state
+    # grid (instantaneous Hamiltonian of the observables, plots)
+    schedule_ctrl = model.get_driving(grid="control")[1]
+    schedule = model.get_driving(grid="state")[1]
+
+    dim_s = driver_hamiltonian_s.shape[0]
+
+    n_times = len(times)  # time_steps + 1 states: t = 0, ..., tau
+    spectrum = np.zeros((n_times, nlevels))
+    energy = np.zeros(n_times)
+    probabilities = np.zeros((n_times, nlevels))
+    psi_history_s = np.zeros((n_times, dim_s), dtype=complex)
+    eigenstates_history_s = np.zeros((n_times, dim_s, nlevels), dtype=complex)
+
+    sre = SREJax(n_qubits=nqubits - 1, batch_size=1000)
+    entanglement_entropy = EntanglementEntropy(nqubits=nqubits, n_A=nqubits // 2)
+
+
+    # psi is the state at times[i], i = 0..time_steps (i = 0: initial state)
+    for i, psi in midpoint_evolution(
+        psi_init_s,
+        1 - schedule_ctrl,
+        schedule_ctrl,
+        delta_t,
+        driver_hamiltonian_s,
+        target_hamiltonian_s,
+    ):
+        # instantaneous Hamiltonian at the time of the state, H(s(times[i]))
+        hamiltonian_t = (1 - schedule[i]) * driver_hamiltonian_s + (
+            schedule[i]
+        ) * target_hamiltonian_s
+
+        spectrum_t, eigenstates_t = eigsh(
+            hamiltonian_t.astype(complex), which="SA", k=nlevels
+        )
+        order = np.argsort(spectrum_t)
+        spectrum[i] = spectrum_t[order]
+        eigenstates_raw = eigenstates_t[:, order].astype(complex)
+        eigenstates_history_s[i] = eigenstates_raw
+
+        probabilities[i] = (
+            np.einsum("i,ia->a", psi.conj(), eigenstates_raw)
+            * np.einsum("i,ia->a", psi.conj(), eigenstates_raw).conj()
+        ).real
+        energy[i] = np.real(np.vdot(psi, hamiltonian_t @ psi))
+        psi_history_s[i] = psi
+
+    e0 = spectrum[:, 0]
+    e1 = spectrum[:, 1]
+    gap = spectrum[:, 1] - spectrum[:, 0]
+    p0 = probabilities[:, 0]
+    p1 = probabilities[:, 1]
+
+    magic = []
+    entanglement = []
+
+    # subsample if time_steps is large — SRE is O(4^N) per call
+    stride = max(1, 10)
+
+    idx_sub = subsample_indices(time_steps, stride)  # includes t = 0 and t = tau
+    for i in tqdm(idx_sub):
+        state_full = sector.lift(psi_history_s[i])
+        magic.append(sre(psi_history_s[i]))
+        entanglement.append(entanglement_entropy.von_neumann(state_full))
+
+
+    time_sub = times[idx_sub]
+
+
+    # formateo consistente de T para evitar problemas de precisión en el nombre
+    T_str = str(T)
+
+    nombre_archivo = f"../../generated/FrustatedRing/QuantumResourcesvsT_N={N}_T={T_str}_LZR{tag}.npz"
+
+    np.savez(
+        nombre_archivo,
+        T=np.array([T]),  # guardamos T explícitamente también, por seguridad
+        seed=np.array([best_seed]),
+        theta=np.array([theta]),
+        dt=np.array([delta_t]),
+        nsteps=np.array([time_steps]),
+        times=times,  # state grid: every time-resolved observable below
+        times_ctrl=times_ctrl,  # cell midpoints: where schedule_ctrl is sampled
+        evo_energy=energy,
+        e0=e0,
+        e1=e1,
+        gap=gap,
+        schedule=schedule,  # s on `times` (plots, spectrum)
+        schedule_ctrl=schedule_ctrl,  # s on `times_ctrl` (what was propagated)
+        p0=p0,
+        p1=p1,
+        time_sub=time_sub,
+        magic=magic,
+        entanglement=entanglement,
     )
-    order = np.argsort(spectrum_t)
-    spectrum[i] = spectrum_t[order]
-    eigenstates_raw = eigenstates_t[:, order].astype(complex)
-    eigenstates_history_s[i] = eigenstates_raw
 
-    probabilities[i] = (
-        np.einsum("i,ia->a", psi.conj(), eigenstates_raw)
-        * np.einsum("i,ia->a", psi.conj(), eigenstates_raw).conj()
-    ).real
-    energy[i] = np.real(np.vdot(psi, hamiltonian_t @ psi))
-    psi_history_s[i] = psi
+    end = time.perf_counter()
 
-e0 = spectrum[:, 0]
-e1 = spectrum[:, 1]
-gap = spectrum[:, 1] - spectrum[:, 0]
-p0 = probabilities[:, 0]
-p1 = probabilities[:, 1]
-
-magic = []
-entanglement = []
-
-# subsample if time_steps is large — SRE is O(4^N) per call
-stride = max(1, 10)
-
-idx_sub = subsample_indices(time_steps, stride)  # includes t = 0 and t = tau
-for i in tqdm(idx_sub):
-    state_full = sector.lift(psi_history_s[i])
-    magic.append(sre(psi_history_s[i]))
-    entanglement.append(entanglement_entropy.von_neumann(state_full))
-
-
-time_sub = times[idx_sub]
-
-
-# formateo consistente de T para evitar problemas de precisión en el nombre
-T_str = str(T)
-
-nombre_archivo = (
-    f"../../generated/FrustatedRing/QuantumResourcesvsT_N={N}_T={T_str}_LZR{tag}.npz"
-)
-
-np.savez(
-    nombre_archivo,
-    T=np.array([T]),  # guardamos T explícitamente también, por seguridad
-    seed=np.array([best_seed]),
-    theta=np.array([theta]),
-    dt=np.array([delta_t]),
-    nsteps=np.array([time_steps]),
-    times=times,  # state grid: every time-resolved observable below
-    times_ctrl=times_ctrl,  # cell midpoints: where schedule_ctrl is sampled
-    evo_energy=energy,
-    e0=e0,
-    e1=e1,
-    gap=gap,
-    schedule=schedule,  # s on `times` (plots, spectrum)
-    schedule_ctrl=schedule_ctrl,  # s on `times_ctrl` (what was propagated)
-    p0=p0,
-    p1=p1,
-    time_sub=time_sub,
-    magic=magic,
-    entanglement=entanglement,
-)
-
-end = time.perf_counter()
-
-elapsed = end - start
-print("Completed!! ")
-print(f"Guardado: {nombre_archivo}")
-print(f"Elapsed time: {elapsed:.2f} seconds")
+    elapsed = end - start
+    print("Completed!! ")
+    print(f"Guardado: {nombre_archivo}")
+    print(f"Elapsed time: {elapsed:.2f} seconds")
