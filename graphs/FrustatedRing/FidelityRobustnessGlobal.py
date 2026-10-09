@@ -16,9 +16,17 @@ tag_T = ""  # "_more_T" or ""
 N = 7
 T = 100
 
+# "exact": the evolution re-run for every lambda
+# "second_order": 1 - lam^T Re(G) lam, relative to the unperturbed final state
+method = "exact"
+# what the exact fidelity is measured against (see src/fidelity_robustness.py):
+# "ground_space" (population in the ground space of H_P), "ground_symmetric"
+# (its Z2 +1 ground state) or "final_state" (the unperturbed final state)
+reference = "ground_space"
+
 # range of the global field lambda, V = lambda * sum_i sigma^a_i, for each axis a
 lambda_range = {"x": (-0.05, 0.05), "y": (-0.05, 0.05), "z": (-0.02, 0.02)}
-n_lambdas = 1001
+n_lambdas = 101  # "exact" costs one evolution per value
 
 data = np.load(
     f"../../generated/FrustatedRing/QuantumResourcesvsT_N={N}_LZR"
@@ -48,7 +56,6 @@ schedules = {
     "Linear schedule": saved["times_ctrl"] / T,
 }
 
-# each fidelity is relative to the unperturbed final state of its own schedule
 robustness = {}
 for name, s_ctrl in schedules.items():
     print(name)
@@ -61,16 +68,30 @@ for name, s_ctrl in schedules.items():
         T,
         verbose=True,
     )
-    robustness[name].compute()
+    if method == "second_order":
+        robustness[name].compute()
 
+ylabels = {
+    "ground_space": "Ground-space population",
+    "ground_symmetric": "Fidelity with the symmetric ground state",
+    "final_state": "Fidelity with the unperturbed final state",
+}
+
+# the default choice keeps the plain name; the others are told apart
+if method == "second_order":
+    variant = "_second_order"
+elif reference == "ground_space":
+    variant = ""
+else:
+    variant = f"_{reference}"
 name_tag = (tag + tag_T).lstrip("_")
-filename = (name_tag + "_" if name_tag else "") + f"N={N}_T={T}.png"
+filename = (name_tag + "_" if name_tag else "") + f"N={N}_T={T}{variant}.png"
 
 for a, axis in enumerate(AXES):
     lambda_min, lambda_max = lambda_range[axis]
     lambdas = np.linspace(lambda_min, lambda_max, n_lambdas)
 
-    # lam =[x_0..x_{N-1}, y_0..y_{N-1}, z_0..z_{N-1}]: lambda on the N
+    # lam = [x_0..x_{N-1}, y_0..y_{N-1}, z_0..z_{N-1}]: lambda on the N
     # entries of this axis, 0 on the other 2N
     lam = np.zeros((n_lambdas, 3, nqubits))
     lam[:, a, :] = lambdas[:, None]
@@ -78,33 +99,35 @@ for a, axis in enumerate(AXES):
     plt.figure(figsize=(7, 5))
     bottom = 1.0
     for k, name in enumerate(schedules):
-        fidelity = robustness[name].fidelity(lam)
+        if method == "exact":
+            fidelity = robustness[name].fidelity(lam, reference=reference)
+            f_0 = np.interp(0.0, lambdas, fidelity)
+            print(f"{name}, sum_i sigma^{axis}_i: F(0) = {f_0:.6f}")
+            label = rf"{name}, $F(0)$ = {f_0:.3f}"
+        else:
+            # each fidelity is relative to the unperturbed final state of its
+            # own schedule
+            fidelity = robustness[name].fidelity(lam, method="second_order")
 
-        # scale of validity of the second order along this direction
-        g_axis = robustness[name].infidelity(lam[-1]) / lambdas[-1] ** 2
-        lambda_star = 1 / np.sqrt(g_axis) if g_axis > 0 else np.inf
-        print(
-            f"{name}, sum_i sigma^{axis}_i: Re G = {g_axis:.6g}, "
-            f"lambda* = {lambda_star:.4g} (second order off by > ~1 % for "
-            f"|lambda| > {lambda_star / 3:.4g})"
-        )
-
-        plt.plot(
-            lambdas,
-            fidelity,
-            "-",
-            linewidth=1.5,
-            color=f"C{k}",
-            label=rf"{name}, $\lambda^*$ = {lambda_star:.2g}",
-        )
-        # band where the second order is reliable, in the color of its curve
-        if np.isfinite(lambda_star):
-            plt.axvspan(
-                max(-lambda_star / 3, lambda_min),
-                min(lambda_star / 3, lambda_max),
-                color=f"C{k}",
-                alpha=0.2,
+            # scale of validity of the second order along this direction
+            g_axis = robustness[name].infidelity(lam[-1]) / lambdas[-1] ** 2
+            lambda_star = 1 / np.sqrt(g_axis) if g_axis > 0 else np.inf
+            print(
+                f"{name}, sum_i sigma^{axis}_i: Re G = {g_axis:.6g}, "
+                f"lambda* = {lambda_star:.4g} (second order off by > ~1 % for "
+                f"|lambda| > {lambda_star / 3:.4g})"
             )
+            label = rf"{name}, $\lambda^*$ = {lambda_star:.2g}"
+            # band where the second order is reliable, in the color of its curve
+            if np.isfinite(lambda_star):
+                plt.axvspan(
+                    max(-lambda_star / 3, lambda_min),
+                    min(lambda_star / 3, lambda_max),
+                    color=f"C{k}",
+                    alpha=0.2,
+                )
+
+        plt.plot(lambdas, fidelity, "-", linewidth=1.5, color=f"C{k}", label=label)
         bottom = min(bottom, fidelity.min())
     # the second-order fidelity is not bounded below: the axis stops at 0
     bottom = max(bottom, 0.0)
@@ -112,11 +135,15 @@ for a, axis in enumerate(AXES):
     plt.ylim(bottom - margin, 1 + margin)
     plt.xlim(lambda_min, lambda_max)
     plt.xlabel(r"$\lambda$")
-    plt.ylabel("Fidelity (second order)")
+    if method == "exact":
+        plt.ylabel(ylabels[reference])
+        plt.legend()
+    else:
+        plt.ylabel("Fidelity (second order)")
+        plt.legend(title=r"shaded: $|\lambda| \leq \lambda^*/3$")
     plt.title(
         rf"$V = \lambda \sum_i \sigma^{axis}_i$,  N={N}, T={T}, LZR{tag + tag_T}"
     )
-    plt.legend(title=r"shaded: $|\lambda| \leq \lambda^*/3$")
     plt.grid()
 
     path = f"../../images/FrustatedRing/FidelityRobustnessGlobal{axis.upper()}/"

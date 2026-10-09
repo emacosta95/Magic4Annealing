@@ -1,7 +1,8 @@
 # src/fidelity_robustness.py
 """
-Second-order robustness of the final-state fidelity against local fields, by
-the augmented-matrix (Van Loan) method. Spin basis, full 2^N space.
+Robustness of the final-state fidelity against local fields: exact (the
+evolution is re-run for every value of the fields) and to second order (the
+augmented-matrix / Van Loan method). Spin basis, full 2^N space.
 
 Perturbed evolution
 -------------------
@@ -14,8 +15,30 @@ Perturbed evolution
           significant bit (SpinOperator, as in src.annealing_utils).
     f_k : optional time profile, 1 by default (static field).
 
-Fidelity with respect to the UNPERTURBED final state (not the ground state of
-H_P), to second order in lam:
+Exact fidelity (method="exact", the default)
+--------------------------------------------
+|psi_lam(T)> from the same midpoint-rule evolution, and its population in a
+reference subspace with orthonormal basis {|r_n>}:
+
+    F(lam) = sum_n |<r_n|psi_lam(T)>|^2
+
+    "ground_space"     : the ground space of the UNPERTURBED H_P. It is
+                         degenerate (|s> and its global flip |s_bar> for the
+                         ZZ models here), so this is the probability of
+                         reading out a ground state (the default)
+    "ground_symmetric" : its Pi = prod_i sigma^x_i = +1 part, (|s> +
+                         |s_bar>)/sqrt(2): the ground state of the Z2 +1
+                         sector the unperturbed evolution aims at. Also
+                         sensitive to the relative phase of |s> and |s_bar>
+    "final_state"      : the unperturbed final state |psi_0(T)>
+
+F(0) is not 1 for the ground-state references: it is the unperturbed
+success probability of the schedule.
+
+Second order (method="second_order")
+------------------------------------
+Only with respect to the UNPERTURBED final state (the expansion about the
+ground state would need the second derivative of the state):
 
     F(lam) = |<psi_0(T)|psi_lam(T)>|^2  ~  1 - sum_ij lam_i lam_j Re G_ij
     G_ij   = <d_i|d_j> - <d_i|psi_0(T)><psi_0(T)|d_j>
@@ -25,8 +48,6 @@ G = T^2 Cov(Vbar_i, Vbar_j) is the quantum geometric tensor of the final
 state. It is Hermitian; only Re G (real, symmetric, positive semidefinite)
 enters the fidelity.
 
-Method
-------
 The derivative is taken of the DISCRETE midpoint-rule evolution of
 src/time_grid.py, not of the continuous equation, so G is the second
 derivative of the fidelity a brute-force re-evolution on the same grid would
@@ -52,6 +73,8 @@ from tqdm import tqdm
 from src.time_grid import make_time_grids
 
 AXES = ("x", "y", "z")
+# named reference subspaces of the exact fidelity (reference_states)
+REFERENCES = ("ground_space", "ground_symmetric", "final_state")
 
 
 def local_pauli_operators(nqubits: int):
@@ -76,8 +99,9 @@ def local_pauli_operators(nqubits: int):
 
 class FidelityRobustness:
     """
-    Robustness matrix G of one annealing evolution with respect to the 3N
-    local fields lam_k sigma^a_i, and the second-order fidelity built from it.
+    Fidelity of one annealing evolution under the 3N local fields
+    lam_k sigma^a_i: exact (final_states, population, fidelity) and to second
+    order through the robustness matrix G (compute, infidelity).
 
     Parameters
     ----------
@@ -104,6 +128,8 @@ class FidelityRobustness:
     psi_final   : (2^N,) unperturbed final state
     lambda_star : 1 / sqrt(max eig Re G), scale of validity of the second
                   order (for |lam| >~ lambda_star / 3 it is off by > ~1 %)
+
+    The exact fidelity does not need compute().
     """
 
     def __init__(
@@ -159,6 +185,7 @@ class FidelityRobustness:
         self.verbose = verbose
 
         self.operators, self.labels = local_pauli_operators(self.nqubits)
+        self._references = {}  # reference subspaces of the exact fidelity
 
         self.G = None
         self.cov = None
@@ -271,10 +298,162 @@ class FidelityRobustness:
         out = np.einsum("...i,ij,...j->...", lam, self.G.real, lam)
         return float(out) if out.ndim == 0 else out
 
-    def fidelity(self, lam):
-        """Second-order fidelity 1 - lam^T Re(G) lam (see `infidelity`). Not
-        clipped: it leaves [0, 1] once lam is far beyond lambda_star."""
-        return 1.0 - self.infidelity(lam)
+    # ── exact fidelity ───────────────────────────────────────────────────────
+    def _evolve_batch(self, lam):
+        """|psi_lam(T)> for the rows of lam (L, 3N), propagated together as
+        the block-diagonal system 1_L (x) H_0 + sum_k diag(lam[:, k]) (x) V_k."""
+        n_batch, dim = len(lam), self.dim
+        size = n_batch * dim
+
+        # generators -i dt (...) built once, as in _forward_pass
+        identity = sp.identity(n_batch, format="csr", dtype=complex)
+        gen_driver = sp.kron(
+            identity, -1j * self.dt * self.driver_hamiltonian, format="csr"
+        )
+        gen_target = sp.kron(
+            identity, -1j * self.dt * self.target_hamiltonian, format="csr"
+        )
+        # one term per perturbation that is switched on in some row of lam
+        active = np.flatnonzero(np.any(lam != 0, axis=0))
+        terms = []
+        for k in active:
+            weights = sp.diags(lam[:, k]).tocsr()
+            weights.eliminate_zeros()
+            terms.append(
+                sp.kron(weights, -1j * self.dt * self.operators[k], format="csr")
+            )
+        gen_perturbation = sp.csr_matrix((size, size), dtype=complex)
+        if self.profiles is None:
+            for term in terms:
+                gen_perturbation = gen_perturbation + term
+
+        x = np.tile(self.initial_state, n_batch)
+
+        steps = range(self.nsteps)
+        if self.verbose:
+            steps = tqdm(steps, desc=f"Exact evolution, {n_batch} values of lambda")
+        for n in steps:
+            if self.profiles is not None:
+                gen_perturbation = sp.csr_matrix((size, size), dtype=complex)
+                for k, term in zip(active, terms):
+                    gen_perturbation = gen_perturbation + self.profiles[k, n] * term
+            s_n = self.schedule_ctrl[n]
+            x = expm_multiply(
+                (1 - s_n) * gen_driver + s_n * gen_target + gen_perturbation, x
+            )
+
+        return x.reshape(n_batch, dim)
+
+    def final_states(self, lam, batch_size=None):
+        """
+        Exact |psi_lam(T)>: the midpoint-rule evolution re-run with
+        H_0(tbar_n) + sum_k lam_k f_k(tbar_n) V_k.
+
+        lam        : (3N,) or (3, N) coefficients ordered by axis, or a batch
+                     (L, 3N) / (L, 3, N)
+        batch_size : values of lam propagated together (one expm_multiply per
+                     step for all of them). None -> as many as keep
+                     batch_size * 2^N <= 2^15
+
+        Returns (2^N,), or (L, 2^N) for a batch.
+        """
+        lam = self._as_lambda(lam)
+        batch_shape = lam.shape[:-1]
+        lam = lam.reshape(-1, self.n_perturbations)
+        if batch_size is None:
+            batch_size = max(1, 2**15 // self.dim)
+
+        states = np.zeros((len(lam), self.dim), dtype=complex)
+        for first in range(0, len(lam), batch_size):
+            last = first + batch_size
+            states[first:last] = self._evolve_batch(lam[first:last])
+        return states.reshape(batch_shape + (self.dim,))
+
+    def ground_space(self, atol=1e-9):
+        """Orthonormal basis (n, 2^N), one state per row, of the ground space
+        of the (unperturbed) target Hamiltonian."""
+        hamiltonian = self.target_hamiltonian
+        diagonal = hamiltonian.diagonal()
+        if (hamiltonian - sp.diags(diagonal)).count_nonzero() == 0:
+            # classical target: the ground space is spanned by basis states
+            energies = diagonal.real
+            idx = np.flatnonzero(energies <= energies.min() + atol)
+            basis = np.zeros((len(idx), self.dim), dtype=complex)
+            basis[np.arange(len(idx)), idx] = 1.0
+            return basis
+        energies, vectors = np.linalg.eigh(hamiltonian.toarray())
+        return vectors[:, energies <= energies[0] + atol].T.astype(complex)
+
+    def reference_states(self, reference="ground_space"):
+        """
+        Orthonormal states (n, 2^N), one per row, spanning the subspace the
+        exact fidelity is measured against:
+
+            "ground_space"     : the ground space of the target Hamiltonian
+            "ground_symmetric" : its Pi = prod_i sigma^x_i = +1 part
+            "final_state"      : the unperturbed final state |psi_0(T)>
+
+        or an array of orthonormal states, which is returned as (n, 2^N).
+        """
+        if not isinstance(reference, str):
+            return np.atleast_2d(np.asarray(reference, dtype=complex))
+        if reference not in self._references:
+            if reference == "ground_space":
+                states = self.ground_space()
+            elif reference == "ground_symmetric":
+                basis = self.ground_space()
+                # Pi flips every qubit: component i <-> component 2^N - 1 - i
+                symmetrized = (basis + basis[:, ::-1]) / 2
+                _, weights, vh = np.linalg.svd(symmetrized, full_matrices=False)
+                states = vh[weights > 1e-10]
+            elif reference == "final_state":
+                if self.psi_final is None:
+                    self.psi_final = self.final_states(np.zeros(self.n_perturbations))
+                states = self.psi_final[None, :]
+            else:
+                raise ValueError(
+                    "reference must be 'ground_space', 'ground_symmetric', "
+                    f"'final_state' or an array of states, got {reference!r}"
+                )
+            self._references[reference] = states
+        return self._references[reference]
+
+    def population(self, states, reference="ground_space"):
+        """sum_n |<r_n|psi>|^2 over the reference states (see
+        reference_states). states: (2^N,) or (L, 2^N); returns a float or (L,)."""
+        reference = self.reference_states(reference)
+        out = (np.abs(np.asarray(states) @ reference.conj().T) ** 2).sum(axis=-1)
+        return float(out) if out.ndim == 0 else out
+
+    def fidelity(self, lam, method="exact", reference=None):
+        """
+        Fidelity of the final state perturbed by lam ((3N,), (3, N) or a
+        batch of them).
+
+        method = "exact" (default): re-evolves for every lam and returns the
+            population of |psi_lam(T)> in `reference` ("ground_space" if None;
+            see reference_states). For several references of the same lam,
+            evolve once with final_states and call population on the result.
+        method = "second_order": 1 - lam^T Re(G) lam (see infidelity). Only
+            relative to the unperturbed final state. Not clipped: it leaves
+            [0, 1] once lam is far beyond lambda_star.
+        """
+        if method == "second_order":
+            if reference is not None and not (
+                isinstance(reference, str) and reference == "final_state"
+            ):
+                raise ValueError(
+                    "the second order is only defined relative to the "
+                    "unperturbed final state (reference='final_state')"
+                )
+            return 1.0 - self.infidelity(lam)
+        if method != "exact":
+            raise ValueError(
+                f"method must be 'exact' or 'second_order', got {method!r}"
+            )
+        if reference is None:
+            reference = "ground_space"
+        return self.population(self.final_states(lam), reference)
 
     def to_dict(self) -> dict:
         """Arrays worth saving with np.savez (G complete, so the fidelity for
