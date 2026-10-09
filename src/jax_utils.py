@@ -656,9 +656,21 @@ class SREJax:
         b_dot_x = (b_vecs_batch.astype(jnp.int32) @ self._bit_matrix.T) % 2  # (B, 2^n)
         signs = 1 - 2 * b_dot_x  # (B, 2^n)
 
-        xi = jnp.einsum(
+        # <psi| Z^b X^a |psi>, real for an even number of Y and purely
+        # imaginary for an odd one
+        zx = jnp.einsum(
             "x,px,px->p", psi.conj(), signs.astype(jnp.float64), psi_flipped
-        ).real  # (B,)
+        )  # (B,)
+
+        # the Hermitian Pauli string is P = (-i)^{n_Y} Z^b X^a (Y = -i Z X),
+        # with n_Y = a . b the number of sites where both X and Z act
+        a_bits = (
+            a_int_batch[:, None] >> jnp.arange(self.n - 1, -1, -1)[None, :]
+        ) & 1  # (B, n)
+        n_y = jnp.sum(a_bits * b_vecs_batch.astype(jnp.int32), axis=1)  # (B,)
+        phase = jnp.array([1, -1j, -1, 1j], dtype=jnp.complex128)[n_y % 4]
+
+        xi = (phase * zx).real  # (B,)
         return xi
 
     def characteristic_function(self, psi: np.ndarray) -> np.ndarray:
