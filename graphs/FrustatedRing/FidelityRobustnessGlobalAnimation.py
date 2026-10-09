@@ -38,13 +38,13 @@ def load_data(archivo_salida):
     return resultado
 
 
-tag = "_bounded"  # "_NoGrad", "_step_test", "_bounded", "_no_random" or ""
+tag = "_FF_bounded"  # "_NoGrad", "_step_test", "_bounded", "_no_random" or ""
 tag_T = ""  # "_more_T" or ""
 N = 7
 T_step = 1  # one frame every T_step values of T in the file
 
-# range of the global field lambda, V = lambda * sum_i sigma^a_i (a = x, y, z)
-lambda_min, lambda_max = -0.05, 0.05
+# range of the global field lambda, V = lambda * sum_i sigma^a_i, for each axis a
+lambda_range = {"x": (-0.05, 0.05), "y": (-0.05, 0.05), "z": (-0.02, 0.02)}
 n_lambdas = 1001
 
 duration = 30  # seconds of video; the frame rate is (number of T) / duration
@@ -67,7 +67,6 @@ Tlist = sorted(data.keys())[::T_step]
 fps = len(Tlist) / duration
 
 nqubits = N
-lambdas = np.linspace(lambda_min, lambda_max, n_lambdas)
 curves = {"LZR schedule": "G", "Linear schedule": "G_linear"}
 
 name_tag = (tag + tag_T).lstrip("_")
@@ -78,6 +77,9 @@ for a, axis in enumerate(AXES):
     # entries of this axis, 0 on the other 2N
     direction = np.zeros(3 * nqubits)
     direction[a * nqubits : (a + 1) * nqubits] = 1.0
+
+    lambda_min, lambda_max = lambda_range[axis]
+    lambdas = np.linspace(lambda_min, lambda_max, n_lambdas)
 
     fig, ax = plt.subplots(figsize=(7, 5.6))
     fig.subplots_adjust(bottom=0.25)

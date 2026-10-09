@@ -16,8 +16,8 @@ tag_T = ""  # "_more_T" or ""
 N = 7
 T = 100
 
-# range of the global field lambda, V = lambda * sum_i sigma^a_i (a = x, y, z)
-lambda_min, lambda_max = -0.05, 0.05
+# range of the global field lambda, V = lambda * sum_i sigma^a_i, for each axis a
+lambda_range = {"x": (-0.05, 0.05), "y": (-0.05, 0.05), "z": (-0.02, 0.02)}
 n_lambdas = 1001
 
 data = np.load(
@@ -63,13 +63,14 @@ for name, s_ctrl in schedules.items():
     )
     robustness[name].compute()
 
-lambdas = np.linspace(lambda_min, lambda_max, n_lambdas)
-
 name_tag = (tag + tag_T).lstrip("_")
 filename = (name_tag + "_" if name_tag else "") + f"N={N}_T={T}.png"
 
 for a, axis in enumerate(AXES):
-    # lam = [x_0..x_{N-1}, y_0..y_{N-1}, z_0..z_{N-1}]: lambda on the N
+    lambda_min, lambda_max = lambda_range[axis]
+    lambdas = np.linspace(lambda_min, lambda_max, n_lambdas)
+
+    # lam =[x_0..x_{N-1}, y_0..y_{N-1}, z_0..z_{N-1}]: lambda on the N
     # entries of this axis, 0 on the other 2N
     lam = np.zeros((n_lambdas, 3, nqubits))
     lam[:, a, :] = lambdas[:, None]
