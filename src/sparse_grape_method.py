@@ -14,6 +14,14 @@ Supports all schedule types from JaxSchedule:
     'power law'         : polynomial correction                — 2*dim params
     'LZS'               : M-plateau interferometer ansatz      — 3*dim+1 params
 
+Time discretization (midpoint rule, see src/time_grid.py):
+    dt = tf / nsteps;  states on self.time (t_k = k dt, k = 0..nsteps);
+    step k applies exp(-i dt H(tbar_k)) with the schedule evaluated at the
+    cell midpoint tbar_k = (k + 1/2) dt (self.time_ctrl). Below, t_i denotes
+    whichever grid the schedule is evaluated on: the control grid for the
+    propagation and the GRAPE gradient, the state grid for observables/plots
+    (get_driving(grid=...)).
+
 Schedule structure (same as JaxSchedule):
     h_driver(t_i) = ramp_drv(t_i) * (1 + correction_drv(t_i))
     h_target(t_i) = ramp_tgt(t_i) * (1 + correction_tgt(t_i))
@@ -53,15 +61,17 @@ Usage in study_1d_ising.py:
     # opt_results keys are identical to JaxTrainer output:
     # success, message, n_iterations, n_evals, energy,
     # parameters, psi, h_driver, h_target, time,
+    # h_driver_ctrl, h_target_ctrl, time_ctrl,
     # history_energy, history_parameters, history_drivings, history_psi
+    # (h_driver/h_target/time: state grid; *_ctrl: midpoints used to propagate)
 
 -------------------------------------------------------------------------------
 COLLABORATOR QUICK-START — reading order for this file
 -------------------------------------------------------------------------------
-1. The physics setup: at every timestep t_i we build a time-dependent
+1. The physics setup: at every timestep we build a time-dependent
    Hamiltonian H(t_i) = h_driver(t_i) * H_driver + h_target(t_i) * H_target
-   and propagate the wavefunction psi one small step forward with a matrix
-   exponential. h_driver/h_target are two curves ("schedules") between 0
+   (t_i = midpoint of the step) and propagate the wavefunction psi one small
+   step forward with a matrix exponential. h_driver/h_target are two curves ("schedules") between 0
    and 1 that control the annealing protocol; everything in this file is
    about (a) how those curves are generated from a small set of free
    parameters theta ("schedule ansatz"), and (b) how to differentiate the
@@ -96,6 +106,8 @@ import numpy as np
 import scipy.sparse as sp
 from scipy.optimize import dual_annealing, minimize
 from scipy.sparse.linalg import expm_multiply
+
+from src.time_grid import make_time_grids
 
 
 # ── softplus and its derivative ───────────────────────────────────────────────
@@ -174,7 +186,9 @@ class SparseGRAPEModel:
             `type` (see the per-type sizing block below); for 'LZS' this is
             M, the number of plateaus, NOT the total parameter count.
         nsteps : int
-            Number of points in the time discretization (uniform grid).
+            Number of propagation steps (uniform, dt = tf / nsteps). The
+            state grid self.time has nsteps + 1 points (0..tf); the schedule
+            driving step k is evaluated at the midpoint self.time_ctrl[k].
         type : str
             Which schedule ansatz to use — see module docstring for the
             full list and each one's parameter count.
@@ -199,11 +213,11 @@ class SparseGRAPEModel:
         self.nsteps = nsteps
         self.type = type
         self.number_parameters = number_of_parameters
-        self.time = np.linspace(0, tf, nsteps)
-        self.dt = self.time[1] - self.time[0]
+        # midpoint rule: self.time is the STATE grid (nsteps + 1 points),
+        # self.time_ctrl the CONTROL grid (cell midpoints, nsteps points)
+        self.time, self.time_ctrl, self.dt = make_time_grids(tf, nsteps)
         self.bounds_opt = bounds_opt
         dim = number_of_parameters
-        t = self.time
 
         # ── parameter sizing ──────────────────────────────────────────────────
         # Each ansatz type packs its free parameters into a single flat
@@ -243,8 +257,9 @@ class SparseGRAPEModel:
 
         # ── basis functions ───────────────────────────────────────────────────
         # Precompute the (fixed, parameter-independent) time-series basis
-        # functions once here so _compute_driving_and_jacobian only needs to
-        # do a cheap matrix-vector product per optimizer call.
+        # functions once here (on both grids, see _build_basis) so
+        # _compute_driving_and_jacobian only needs to do a cheap matrix-vector
+        # product per optimizer call.
         if type in ("fourier", "F-CRAB", "positive fourier", "squared fourier"):
             if type == "F-CRAB":
                 # F-CRAB ("Free" CRAB): frequencies are randomised around
@@ -261,18 +276,6 @@ class SparseGRAPEModel:
             else:
                 self.omegas = np.pi * np.arange(1, dim + 1) / tf
 
-            # sin_basis[k, i] = sin(ω_k * t_i)   shape: (dim, nsteps)
-            self._sin_basis = np.sin(np.outer(self.omegas, t))
-
-            if type in ("positive fourier", "squared fourier"):
-                # cos only needed for these two types
-                self._cos_basis = np.cos(np.outer(self.omegas, t))
-
-        elif type == "power law":
-            exponents = np.arange(1, dim + 1)[:, None]
-            # pw_basis[k, i] = (t_i / tf)^(k+1)   shape: (dim, nsteps)
-            self._pw_basis = (t[None, :] / tf) ** exponents
-
         elif type == "LZS":
             # Direct s(t) parametrization — nothing to precompute besides
             # the segment count (kept for clarity/symmetry with JaxSchedule).
@@ -280,6 +283,11 @@ class SparseGRAPEModel:
             # ramp, plateau, ramp, plateau, ..., ramp (M+1 ramps, M plateaus).
             self._lzs_M = dim
             self._lzs_n_seg = 2 * dim + 1
+
+        self._basis = {
+            "control": self._build_basis(self.time_ctrl),
+            "state": self._build_basis(self.time),
+        }
 
         # ── sparse Hamiltonians (kept sparse throughout) ───────────────────────
         # Cast to complex up front so every downstream matrix-vector product
@@ -304,7 +312,44 @@ class SparseGRAPEModel:
         self.run_number = 0
 
     # ─────────────────────────────────────────────────────────────────────────
-    def _compute_driving_and_jacobian(self, parameters: np.ndarray):
+    def _build_basis(self, t: np.ndarray) -> dict:
+        """
+        Parameter-independent basis functions of the ansatz on the time
+        points `t` (empty for 'LZS', which has nothing to precompute).
+        """
+        dim = self.number_parameters
+        basis = {}
+        if self.type in ("fourier", "F-CRAB", "positive fourier", "squared fourier"):
+            # sin[k, i] = sin(ω_k * t_i)   shape: (dim, len(t))
+            basis["sin"] = np.sin(np.outer(self.omegas, t))
+            if self.type in ("positive fourier", "squared fourier"):
+                # cos only needed for these two types
+                basis["cos"] = np.cos(np.outer(self.omegas, t))
+        elif self.type == "power law":
+            exponents = np.arange(1, dim + 1)[:, None]
+            # pw[k, i] = (t_i / tf)^(k+1)   shape: (dim, len(t))
+            basis["pw"] = (t[None, :] / self.tf) ** exponents
+        return basis
+
+    def _resolve_grid(self, grid):
+        """
+        (t, basis) for grid = 'control' (cell midpoints, what the propagator
+        and the GRAPE gradient use), 'state' (self.time, for observables and
+        plots), or an explicit array of times.
+        """
+        if isinstance(grid, str):
+            if grid == "control":
+                return self.time_ctrl, self._basis["control"]
+            if grid == "state":
+                return self.time, self._basis["state"]
+            raise ValueError(
+                f"grid must be 'control', 'state' or an array, got '{grid}'"
+            )
+        t = np.asarray(grid, dtype=float)
+        return t, self._build_basis(t)
+
+    # ─────────────────────────────────────────────────────────────────────────
+    def _compute_driving_and_jacobian(self, parameters: np.ndarray, grid="control"):
         """
         Compute schedules and their Jacobians w.r.t. parameters.
 
@@ -322,24 +367,30 @@ class SparseGRAPEModel:
             theta, the current parameter vector (one branch is taken below
             depending on self.type; each branch knows its own slicing of
             this vector — see the sizing comment in __init__).
+        grid : 'control' (default), 'state', or an array of times
+            Time points t_i the ansatz is evaluated on (analytically, never
+            interpolated). The propagation and the GRAPE chain rule use the
+            control grid. n_t below is the number of points: nsteps for
+            'control', nsteps + 1 for 'state'.
 
         Returns
         -------
-        h_driver      : (nsteps,)        — driver schedule
-        h_target      : (nsteps,)        — target schedule
-        dh_drv_dtheta : (n_params, nsteps) — ∂h_driver_i / ∂θ_k
-        dh_tgt_dtheta : (n_params, nsteps) — ∂h_target_i / ∂θ_k
+        h_driver      : (n_t,)          — driver schedule
+        h_target      : (n_t,)          — target schedule
+        dh_drv_dtheta : (n_params, n_t) — ∂h_driver_i / ∂θ_k
+        dh_tgt_dtheta : (n_params, n_t) — ∂h_target_i / ∂θ_k
         """
         dim = self.number_parameters
-        t = self.time
+        t, basis = self._resolve_grid(grid)
+        n_t = len(t)
         tf = self.tf
         n_params = len(parameters)
 
-        ramp_drv = 1.0 - t / tf  # (nsteps,)
-        ramp_tgt = t / tf  # (nsteps,)
+        ramp_drv = 1.0 - t / tf  # (n_t,)
+        ramp_tgt = t / tf  # (n_t,)
 
-        dh_drv = np.zeros((n_params, self.nsteps))
-        dh_tgt = np.zeros((n_params, self.nsteps))
+        dh_drv = np.zeros((n_params, n_t))
+        dh_tgt = np.zeros((n_params, n_t))
 
         # ── fourier / F-CRAB: sin only ────────────────────────────────────────
         # h(t) = ramp(t) * (1 + sum_k a_k sin(ω_k t)) — a linear ramp from the
@@ -350,16 +401,16 @@ class SparseGRAPEModel:
             a_drv = parameters[:dim]
             a_tgt = parameters[dim : 2 * dim]
 
-            corr_drv = self._sin_basis.T @ a_drv  # (nsteps,)
-            corr_tgt = self._sin_basis.T @ a_tgt
+            corr_drv = basis["sin"].T @ a_drv  # (n_t,)
+            corr_tgt = basis["sin"].T @ a_tgt
 
             h_driver = ramp_drv * (1.0 + corr_drv)
             h_target = ramp_tgt * (1.0 + corr_tgt)
 
             # ∂h_driver_i / ∂a_drv_k = ramp_drv_i * sin(ω_k * t_i)
-            dh_drv[:dim, :] = self._sin_basis * ramp_drv[None, :]
+            dh_drv[:dim, :] = basis["sin"] * ramp_drv[None, :]
             # ∂h_target_i / ∂a_tgt_k = ramp_tgt_i * sin(ω_k * t_i)
-            dh_tgt[dim : 2 * dim, :] = self._sin_basis * ramp_tgt[None, :]
+            dh_tgt[dim : 2 * dim, :] = basis["sin"] * ramp_tgt[None, :]
 
         # ── positive fourier: softplus(1 + sin+cos correction) ───────────────
         # Same idea as above but the correction is passed through softplus
@@ -372,24 +423,20 @@ class SparseGRAPEModel:
             a_tgt = parameters[2 * dim : 3 * dim]
             b_tgt = parameters[3 * dim : 4 * dim]
 
-            raw_drv = self._sin_basis.T @ a_drv + self._cos_basis.T @ b_drv  # (nsteps,)
-            raw_tgt = self._sin_basis.T @ a_tgt + self._cos_basis.T @ b_tgt
+            raw_drv = basis["sin"].T @ a_drv + basis["cos"].T @ b_drv  # (n_t,)
+            raw_tgt = basis["sin"].T @ a_tgt + basis["cos"].T @ b_tgt
 
             h_driver = ramp_drv * _softplus(1.0 + raw_drv) / _SOFTPLUS_1
             h_target = ramp_tgt * _softplus(1.0 + raw_tgt) / _SOFTPLUS_1
 
             # chain rule: d/da_k softplus(1 + raw) = sigmoid(1 + raw) * sin_k
-            sig_drv = _sigmoid(1.0 + raw_drv) / _SOFTPLUS_1  # (nsteps,)
+            sig_drv = _sigmoid(1.0 + raw_drv) / _SOFTPLUS_1  # (n_t,)
             sig_tgt = _sigmoid(1.0 + raw_tgt) / _SOFTPLUS_1
 
-            dh_drv[:dim, :] = (ramp_drv * sig_drv)[None, :] * self._sin_basis
-            dh_drv[dim : 2 * dim, :] = (ramp_drv * sig_drv)[None, :] * self._cos_basis
-            dh_tgt[2 * dim : 3 * dim, :] = (ramp_tgt * sig_tgt)[
-                None, :
-            ] * self._sin_basis
-            dh_tgt[3 * dim : 4 * dim, :] = (ramp_tgt * sig_tgt)[
-                None, :
-            ] * self._cos_basis
+            dh_drv[:dim, :] = (ramp_drv * sig_drv)[None, :] * basis["sin"]
+            dh_drv[dim : 2 * dim, :] = (ramp_drv * sig_drv)[None, :] * basis["cos"]
+            dh_tgt[2 * dim : 3 * dim, :] = (ramp_tgt * sig_tgt)[None, :] * basis["sin"]
+            dh_tgt[3 * dim : 4 * dim, :] = (ramp_tgt * sig_tgt)[None, :] * basis["cos"]
 
         # ── squared fourier: (1 + sin+cos correction)^2 ──────────────────────
         # Alternative positivity-enforcing nonlinearity: squaring instead of
@@ -401,20 +448,20 @@ class SparseGRAPEModel:
             a_tgt = parameters[2 * dim : 3 * dim]
             b_tgt = parameters[3 * dim : 4 * dim]
 
-            raw_drv = self._sin_basis.T @ a_drv + self._cos_basis.T @ b_drv  # (nsteps,)
-            raw_tgt = self._sin_basis.T @ a_tgt + self._cos_basis.T @ b_tgt
+            raw_drv = basis["sin"].T @ a_drv + basis["cos"].T @ b_drv  # (n_t,)
+            raw_tgt = basis["sin"].T @ a_tgt + basis["cos"].T @ b_tgt
 
             h_driver = ramp_drv * (1.0 + raw_drv) ** 2
             h_target = ramp_tgt * (1.0 + raw_tgt) ** 2
 
             # d/da_k (1+raw)^2 = 2*(1+raw) * sin_k
-            factor_drv = 2.0 * ramp_drv * (1.0 + raw_drv)  # (nsteps,)
+            factor_drv = 2.0 * ramp_drv * (1.0 + raw_drv)  # (n_t,)
             factor_tgt = 2.0 * ramp_tgt * (1.0 + raw_tgt)
 
-            dh_drv[:dim, :] = factor_drv[None, :] * self._sin_basis
-            dh_drv[dim : 2 * dim, :] = factor_drv[None, :] * self._cos_basis
-            dh_tgt[2 * dim : 3 * dim, :] = factor_tgt[None, :] * self._sin_basis
-            dh_tgt[3 * dim : 4 * dim, :] = factor_tgt[None, :] * self._cos_basis
+            dh_drv[:dim, :] = factor_drv[None, :] * basis["sin"]
+            dh_drv[dim : 2 * dim, :] = factor_drv[None, :] * basis["cos"]
+            dh_tgt[2 * dim : 3 * dim, :] = factor_tgt[None, :] * basis["sin"]
+            dh_tgt[3 * dim : 4 * dim, :] = factor_tgt[None, :] * basis["cos"]
 
         # ── power law ─────────────────────────────────────────────────────────
         # Correction built from a polynomial basis (t/tf)^(k+1), k=1..dim,
@@ -424,15 +471,15 @@ class SparseGRAPEModel:
             c_drv = parameters[:dim]
             c_tgt = parameters[dim : 2 * dim]
 
-            corr_drv = self._pw_basis.T @ c_drv  # (nsteps,)
-            corr_tgt = self._pw_basis.T @ c_tgt
+            corr_drv = basis["pw"].T @ c_drv  # (n_t,)
+            corr_tgt = basis["pw"].T @ c_tgt
 
             h_driver = ramp_drv * (1.0 + corr_drv)
             h_target = ramp_tgt * (1.0 + corr_tgt)
 
             # ∂h_driver_i / ∂c_drv_k = ramp_drv_i * (t_i/tf)^(k+1)
-            dh_drv[:dim, :] = self._pw_basis * ramp_drv[None, :]
-            dh_tgt[dim : 2 * dim, :] = self._pw_basis * ramp_tgt[None, :]
+            dh_drv[:dim, :] = basis["pw"] * ramp_drv[None, :]
+            dh_tgt[dim : 2 * dim, :] = basis["pw"] * ramp_tgt[None, :]
 
         # ── LZS: M-plateau Landau-Zener-Stückelberg interference ansatz ──────
         # Unlike every branch above, this one does NOT use a ramp envelope
@@ -512,11 +559,11 @@ class SparseGRAPEModel:
             # Step 4 — walk through the 2M+1 alternating ramp/plateau
             # segments, filling in s(t) and its Jacobian ds_dtheta segment
             # by segment. ds_dtheta packs BOTH parameter blocks into one
-            # (n_params, nsteps) array: rows [0:n_seg] are duration
+            # (n_params, n_t) array: rows [0:n_seg] are duration
             # sensitivities, rows [n_seg:n_seg+M] are plateau-height
             # sensitivities.
             s = np.zeros_like(t)
-            ds_dtheta = np.zeros((n_params, self.nsteps))
+            ds_dtheta = np.zeros((n_params, n_t))
 
             for seg in range(n_seg):
                 t0, t1 = t_bounds[seg], t_bounds[seg + 1]
@@ -586,16 +633,23 @@ class SparseGRAPEModel:
         return h_driver, h_target, dh_drv, dh_tgt
 
     # ─────────────────────────────────────────────────────────────────────────
-    def get_driving(self, parameters=None) -> tuple:
+    def get_driving(self, parameters=None, grid="control") -> tuple:
         """
         Returns (h_driver, h_target) as numpy arrays, evaluated at
         `parameters` (or at self.parameters if not given). Convenience
         wrapper around _compute_driving_and_jacobian that discards the
-        Jacobian — use this when you just want to plot/inspect the schedule.
+        Jacobian.
+
+        grid = 'control' (default): one value per propagation step, at the
+            cell midpoints self.time_ctrl — exactly what the propagator uses.
+        grid = 'state': on self.time (nsteps + 1 points, 0..tf) — use this
+            one to plot the schedule or to build the instantaneous
+            Hamiltonian of an observable evaluated at self.time[k].
+        grid = array: the ansatz evaluated on those times.
         """
         if parameters is None:
             parameters = self.parameters
-        h_drv, h_tgt, _, _ = self._compute_driving_and_jacobian(parameters)
+        h_drv, h_tgt, _, _ = self._compute_driving_and_jacobian(parameters, grid=grid)
         return h_drv, h_tgt
 
     # ─────────────────────────────────────────────────────────────────────────
@@ -641,6 +695,8 @@ class SparseGRAPEModel:
         Core GRAPE computation.
 
         Forward pass  : |ψ_0⟩ → |ψ_1⟩ → ... → |ψ_T⟩  via sparse expm_multiply
+                        (nsteps steps of dt = tf/nsteps; step i uses the
+                        schedule at the cell midpoint self.time_ctrl[i])
         Energy        : E = ⟨ψ_T| H_ref |ψ_T⟩
         Backward pass : |χ_T⟩ = H_ref|ψ_T⟩ propagated backward
         GRAPE         : dE/dh_x_i = -2 dt Im[⟨χ_i| H_x |ψ_i⟩]
@@ -675,7 +731,8 @@ class SparseGRAPEModel:
 
         # ── forward pass ──────────────────────────────────────────────────────
         # Standard piecewise-constant-Hamiltonian propagation: freeze H(t)
-        # over each small interval dt and apply exp(-i dt H) exactly via
+        # over each small interval dt at its midpoint value (h_driver/h_target
+        # live on the control grid) and apply exp(-i dt H) exactly via
         # scipy's Krylov-subspace expm_multiply (avoids ever forming the
         # dense matrix exponential, which is essential once dim gets large).
         psi = self._psi_init.copy()
@@ -773,7 +830,8 @@ class SparseGRAPEModel:
         Optimizer callback (invoked once per ACCEPTED L-BFGS-B iteration,
         not per internal line-search evaluation). Appends a snapshot of the
         current energy/parameters/schedule/state to the history_* lists and
-        prints the current energy for live monitoring.
+        prints the current energy for live monitoring. The schedule snapshot
+        is the control-grid one (get_driving() default).
         """
         self.history.append(self.energy)
         self.history_parameters.append(self.parameters.copy())
@@ -903,7 +961,8 @@ class SparseGRAPETrainer:
 
         # sync final state
         self.model.forward_and_gradient(res.x)
-        h_driver, h_target = self.model.get_driving()
+        h_driver, h_target = self.model.get_driving(grid="state")
+        h_driver_ctrl, h_target_ctrl = self.model.get_driving(grid="control")
 
         if self.verbose:
             print(f"\nOptimization success : {res.success}")
@@ -918,9 +977,14 @@ class SparseGRAPETrainer:
             "energy": float(res.fun),
             "parameters": np.array(res.x),
             "psi": self.model.psi.copy(),
+            # schedule on the state grid `time` (plots, observables) ...
             "h_driver": h_driver,
             "h_target": h_target,
             "time": self.model.time.copy(),
+            # ... and at the cell midpoints `time_ctrl` (what was propagated)
+            "h_driver_ctrl": h_driver_ctrl,
+            "h_target_ctrl": h_target_ctrl,
+            "time_ctrl": self.model.time_ctrl.copy(),
             "history_energy": list(self.model.history),
             "history_parameters": [p.copy() for p in self.model.history_parameters],
             "history_drivings": self.model.history_drivings,
@@ -995,7 +1059,8 @@ class SimulatedAnnealingTrainer:
 
         # sync final state
         self.model.forward(res.x)
-        h_driver, h_target = self.model.get_driving()
+        h_driver, h_target = self.model.get_driving(grid="state")
+        h_driver_ctrl, h_target_ctrl = self.model.get_driving(grid="control")
 
         if self.verbose:
             print(f"\nOptimization success : {res.success}")
@@ -1010,9 +1075,14 @@ class SimulatedAnnealingTrainer:
             "energy": float(res.fun),
             "parameters": np.array(res.x),
             "psi": self.model.psi.copy(),
+            # schedule on the state grid `time` (plots, observables) ...
             "h_driver": h_driver,
             "h_target": h_target,
             "time": self.model.time.copy(),
+            # ... and at the cell midpoints `time_ctrl` (what was propagated)
+            "h_driver_ctrl": h_driver_ctrl,
+            "h_target_ctrl": h_target_ctrl,
+            "time_ctrl": self.model.time_ctrl.copy(),
             "history_energy": list(self.model.history),
             "history_parameters": [p.copy() for p in self.model.history_parameters],
             "history_drivings": self.model.history_drivings,

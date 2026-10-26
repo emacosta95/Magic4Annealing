@@ -16,6 +16,8 @@ random LZS parameter initialization), in parallel across (tau, seed) pairs.
 For every (tau, seed) run we record:
 
     - energy(t)                  (full time resolution, cheap to compute)
+                                 on the state grid t_k = k dt, k = 0..time_steps
+                                 (midpoint rule, src/time_grid.py)
     - magic M2(t)                (subsampled, stride=10 -- O(4^N) per call)
     - entanglement S_vN(t)       (subsampled, stride=10)
     - final energy, energy error vs the true target ground energy
@@ -155,9 +157,8 @@ def _worker_init(threads_per_worker: int):
 # ─────────────────────────────────────────────────────────────────────────────
 def run_single_seed(tau: float, seed: int) -> dict:
     """Optimize the LZS schedule for one (tau, seed) pair and propagate it."""
-    from scipy.sparse.linalg import expm_multiply
-
     from src.jax_utils import JaxSchedulerModel, JaxTrainer
+    from src.time_grid import make_time_grids, midpoint_evolution, subsample_indices
 
     sector = _STATE["sector"]
     target_hamiltonian_s = _STATE["target_hamiltonian_s"]
@@ -169,9 +170,9 @@ def run_single_seed(tau: float, seed: int) -> dict:
 
     t0 = _time.time()
 
-    time_steps = int(STEPS_PER_TAU * tau)
-    time = np.linspace(0, tau, time_steps)
-    delta_t = time[1] - time[0]
+    time_steps = int(STEPS_PER_TAU * tau)  # number of propagation steps
+    # state grid `time` (time_steps + 1 points) and cell midpoints `time_ctrl`
+    time, time_ctrl, delta_t = make_time_grids(tau, time_steps)
 
     model = JaxSchedulerModel(
         initial_state=psi_init_s,
@@ -190,23 +191,34 @@ def run_single_seed(tau: float, seed: int) -> dict:
         model, maxiter=MAXITER, tol=OPT_TOL, ftol=OPT_FTOL, gtol=OPT_GTOL, verbose=False
     )
     opt_results = trainer.run()
+    # schedule on the state grid (observables) and at the cell midpoints
+    # (what the optimizer propagated)
     h_driver, h_target = opt_results["h_driver"], opt_results["h_target"]
+    h_driver_ctrl = opt_results["h_driver_ctrl"]
+    h_target_ctrl = opt_results["h_target_ctrl"]
 
     # ── propagate the optimized schedule (sparse expm_multiply) ───────────────
     dim_s = psi_init_s.shape[0]
-    psi = psi_init_s.copy()
-    energy_per_time = np.zeros(time_steps)
-    psi_history_s = np.zeros((time_steps, dim_s), dtype=complex)
-    for i in range(time_steps):
+    energy_per_time = np.zeros(time_steps + 1)
+    psi_history_s = np.zeros((time_steps + 1, dim_s), dtype=complex)
+    # psi is the state at time[i], i = 0..time_steps (i = 0: initial state)
+    for i, psi in midpoint_evolution(
+        psi_init_s,
+        h_driver_ctrl,
+        h_target_ctrl,
+        delta_t,
+        driver_hamiltonian_s,
+        target_hamiltonian_s,
+    ):
+        # instantaneous Hamiltonian at the time of the state
         hamiltonian_t = (
             h_driver[i] * driver_hamiltonian_s + h_target[i] * target_hamiltonian_s
         )
-        psi = expm_multiply(-1j * delta_t * hamiltonian_t, psi)
         psi_history_s[i] = psi
         energy_per_time[i] = (psi.conj() @ (hamiltonian_t @ psi)).real
 
     # ── magic / entanglement, subsampled (O(4^N) per call) ────────────────────
-    idx_sub = np.arange(0, time_steps, STRIDE)
+    idx_sub = subsample_indices(time_steps, STRIDE)  # includes t = 0 and t = tau
     magic_per_time = np.zeros(idx_sub.shape[0])
     entanglement_per_time = np.zeros(idx_sub.shape[0])
     for k, i in enumerate(idx_sub):
@@ -221,6 +233,9 @@ def run_single_seed(tau: float, seed: int) -> dict:
         "tau": tau,
         "seed": seed,
         "time": time,
+        "time_ctrl": time_ctrl,
+        "dt": delta_t,
+        "nsteps": time_steps,
         "time_sub": time[idx_sub],
         "energy_per_time": energy_per_time,
         "magic_per_time": magic_per_time,
@@ -235,6 +250,8 @@ def run_single_seed(tau: float, seed: int) -> dict:
         "parameters": opt_results["parameters"],
         "h_driver": h_driver,
         "h_target": h_target,
+        "h_driver_ctrl": h_driver_ctrl,
+        "h_target_ctrl": h_target_ctrl,
         "elapsed_seconds": elapsed,
     }
 
@@ -246,7 +263,10 @@ def _save_tau_results(tau: float, seed_results: dict, output_dir: Path):
     stacked = {
         "tau": tau,
         "seeds": np.array(seeds),
-        "time": seed_results[seeds[0]]["time"],
+        "time": seed_results[seeds[0]]["time"],  # state grid
+        "time_ctrl": seed_results[seeds[0]]["time_ctrl"],  # cell midpoints
+        "dt": seed_results[seeds[0]]["dt"],
+        "nsteps": seed_results[seeds[0]]["nsteps"],
         "time_sub": seed_results[seeds[0]]["time_sub"],
         "energy_per_time": np.stack([seed_results[s]["energy_per_time"] for s in seeds]),
         "magic_per_time": np.stack([seed_results[s]["magic_per_time"] for s in seeds]),
@@ -264,6 +284,8 @@ def _save_tau_results(tau: float, seed_results: dict, output_dir: Path):
         "parameters": np.stack([seed_results[s]["parameters"] for s in seeds]),
         "h_driver": np.stack([seed_results[s]["h_driver"] for s in seeds]),
         "h_target": np.stack([seed_results[s]["h_target"] for s in seeds]),
+        "h_driver_ctrl": np.stack([seed_results[s]["h_driver_ctrl"] for s in seeds]),
+        "h_target_ctrl": np.stack([seed_results[s]["h_target_ctrl"] for s in seeds]),
         "e0_target": seed_results[seeds[0]]["e0_target"],
         # ── metadata ────────────────────────────────────────────────────────
         "n_qubits": N_QUBITS,

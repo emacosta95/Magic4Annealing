@@ -60,6 +60,8 @@ import scipy.sparse as sp
 from scipy.optimize import minimize
 from scipy.sparse.linalg import expm_multiply
 
+from src.time_grid import make_time_grids
+
 
 def configuration(res, energy, grad_energy):
     """
@@ -107,7 +109,11 @@ class Schedule:
             number of plateaus), NOT the total parameter count — see the
             sizing block below.
         nsteps : int
-            Number of points in the (uniform) time discretization.
+            Number of propagation steps (uniform, dt = tf / nsteps; midpoint
+            rule, see src/time_grid.py). self.time is the state grid
+            (nsteps + 1 points, 0..tf) and self.time_ctrl the control grid
+            (cell midpoints) on which the schedule driving each step is
+            evaluated.
         seed : int, optional
             Present for interface parity; note the actual random draws
             below (`np.random.uniform(...)`) use the global numpy RNG, not
@@ -129,7 +135,7 @@ class Schedule:
         self.nsteps = nsteps
         self.type = type
         self.mode = mode
-        self.time = np.linspace(0, self.tf, nsteps)
+        self.time, self.time_ctrl, self.dt = make_time_grids(self.tf, nsteps)
         self.number_parameters = number_of_parameters
         self.seed = seed
 
@@ -186,19 +192,30 @@ class Schedule:
             )
 
     # ─────────────────────────────────────────────────────────────────────────
-    def get_driving(self) -> np.ndarray:
+    def get_driving(self, grid: str = "control") -> np.ndarray:
         """
-        Decode self.parameters into (h_driver, h_target) at every point of
-        self.time, for whichever ansatz self.type selects. Pure function of
-        self.parameters/self.type — no history side effects (contrast with
-        SchedulerModel.forward(), which also propagates a wavefunction).
+        Decode self.parameters into (h_driver, h_target) for whichever ansatz
+        self.type selects. Pure function of self.parameters/self.type — no
+        history side effects (contrast with SchedulerModel.forward(), which
+        also propagates a wavefunction).
+
+        grid = 'control' (default): at the cell midpoints self.time_ctrl, one
+            value per propagation step — what forward() uses.
+        grid = 'state': on self.time (nsteps + 1 points, 0..tf), for plots and
+            for the instantaneous Hamiltonian of observables.
 
         Returns
         -------
-        h_driver, h_target : each (nsteps,) ndarray
+        h_driver, h_target : each (nsteps,) ndarray for 'control',
+                             (nsteps + 1,) for 'state'
         """
         dim = self.number_parameters
-        t = self.time
+        if grid == "control":
+            t = self.time_ctrl
+        elif grid == "state":
+            t = self.time
+        else:
+            raise ValueError(f"grid must be 'control' or 'state', got '{grid}'")
         tf = self.tf
 
         # ── compute Fourier / power-law correction matrices ──────────────────
@@ -438,7 +455,8 @@ class SchedulerModel(Schedule):
         Energy-only forward propagation at the given parameters.
 
         Same piecewise-constant-Hamiltonian / sparse expm_multiply scheme
-        as SparseGRAPEModel._forward_and_grad's forward pass:
+        as SparseGRAPEModel._forward_and_grad's forward pass (nsteps steps of
+        dt = tf/nsteps, schedule evaluated at the cell midpoints):
           - psi_init is the caller-supplied `initial_state` (stored as
             self._psi_init in __init__) — same convention as
             SparseGRAPEModel, so a converged schedule here starts from the
@@ -460,11 +478,12 @@ class SchedulerModel(Schedule):
         -------
         energy : float
         """
-        dt = self.time[1] - self.time[0]
+        dt = self.dt
         self.parameters = parameters
 
         hamiltonians = [self.initial_hamiltonian, self.target_hamiltonian]
-        h_driver, h_target = self.get_driving()  # pre-compute once
+        # pre-compute once, on the control grid (cell midpoints)
+        h_driver, h_target = self.get_driving(grid="control")
         schedules = [h_driver, h_target]
 
         # sanity check: initial_state must live in the same Hilbert space
@@ -481,7 +500,8 @@ class SchedulerModel(Schedule):
         psi = self._psi_init.copy()
         for i in range(self.nsteps):
             # H(t_i) = h_driver_i * H_driver + h_target_i * H_target, built
-            # fresh each step from the two schedules and Hamiltonians.
+            # fresh each step from the two schedules and Hamiltonians
+            # (t_i = midpoint of step i).
             time_hamiltonian = sum(schedules[r][i] * hamiltonians[r] for r in range(2))
             psi = expm_multiply(-1j * dt * time_hamiltonian, psi)
 
@@ -648,7 +668,8 @@ class SchedulerTrainer:
 
         # sync final state (mirrors SparseGRAPETrainer.run())
         self.model.forward(res.x)
-        h_driver, h_target = self.model.get_driving()
+        h_driver, h_target = self.model.get_driving(grid="state")
+        h_driver_ctrl, h_target_ctrl = self.model.get_driving(grid="control")
 
         if self.verbose:
             print(f"\nOptimization success : {res.success}")
@@ -665,9 +686,14 @@ class SchedulerTrainer:
             "energy": float(res.fun),
             "parameters": np.array(res.x),
             "psi": self.model.psi.copy(),
+            # schedule on the state grid `time` (plots, observables) ...
             "h_driver": h_driver,
             "h_target": h_target,
             "time": self.model.time.copy(),
+            # ... and at the cell midpoints `time_ctrl` (what was propagated)
+            "h_driver_ctrl": h_driver_ctrl,
+            "h_target_ctrl": h_target_ctrl,
+            "time_ctrl": self.model.time_ctrl.copy(),
             "history_energy": list(self.model.history),
             "history_parameters": [p.copy() for p in self.model.history_parameters],
             "history_drivings": self.model.history_drivings,

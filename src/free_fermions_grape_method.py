@@ -14,6 +14,10 @@ SparseGRAPETrainer.  Only _forward_and_grad is swapped:
 
 Cost O(nsteps * l^3) vs O(nsteps * 2^L).
 
+Time discretization: inherited from SparseGRAPEModel (midpoint rule,
+src/time_grid.py) — the schedules handed to the backend are on the control
+grid, and the initial state is always the explicit driver ground state.
+
 Usage:
     from src.free_fermions_utils import NambuIsing1D
     from src.nambu_grape import NambuGRAPEModel
@@ -73,7 +77,9 @@ class NambuGRAPEModel(SparseGRAPEModel):
         self.nambu = nambu
         self.h_ref = tuple(h_ref)
         # fixed initial state = driver ground state (parameter-independent,
-        # as psi_init in the sparse version)
+        # as psi_init in the sparse version). Always passed as w0 below: the
+        # backend default would be the ground state of H at the first control
+        # point, s(dt/2) != 0.
         _, self._w_init = nambu.diagonalize(1.0, 0.0)
 
     def _forward_and_grad(self, parameters: np.ndarray, compute_grad: bool = True):

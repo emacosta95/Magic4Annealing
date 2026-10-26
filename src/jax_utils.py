@@ -1,0 +1,801 @@
+import numpy as np
+import scipy
+from scipy.optimize import minimize
+from typing import Optional
+
+import jax
+import jax.numpy as jnp
+from jax.scipy.linalg import expm
+from functools import partial
+
+from src.time_grid import make_time_grids
+
+# enable float64 — essential for physics accuracy
+jax.config.update("jax_enable_x64", True)
+
+# ── valid schedule types ───────────────────────────────────────────────────────
+_FOURIER_TYPES = ("F-CRAB", "fourier", "positive fourier", "squared fourier")
+_POSITIVE_TYPES = ("positive fourier", "squared fourier")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+class JaxSchedule:
+    """
+    Mirrors the Schedule class in schedule_utils.py.
+    Stores parameters as numpy arrays for scipy compatibility,
+    converts to jax internally only when needed.
+
+    Schedule types
+    --------------
+    'fourier'          : F-CRAB/Fourier correction — can go negative
+    'F-CRAB'           : same as fourier with randomised frequencies
+    'positive fourier' : Fourier + softplus — guaranteed positive schedules
+    'power law'        : polynomial correction
+    'LZS'              : M-plateau Landau-Zener-Stückelberg interference ansatz
+                         (direct s(t) parametrization, mirrors schedule_utils.py)
+
+    Time discretization (midpoint rule, see src/time_grid.py): `nsteps` is the
+    number of propagation steps, self.time the state grid (nsteps + 1 points,
+    0..tf) and self.time_ctrl the control grid (cell midpoints) on which the
+    schedule driving each step is evaluated.
+    """
+
+    def __init__(
+        self,
+        tf: float,
+        type: str,
+        number_of_parameters: int,
+        nsteps: int,
+        seed: Optional[int] = None,
+        mode: Optional[str] = "annealing ansatz",
+        random: Optional[bool] = False,
+    ):
+        self.tf = tf
+        self.nsteps = nsteps
+        self.type = type
+        self.mode = mode
+        # state grid (nsteps + 1 points) and control grid (cell midpoints)
+        self.time, self.time_ctrl, self.dt = make_time_grids(tf, nsteps)
+        self.number_parameters = number_of_parameters
+        self.seed = seed
+
+        dim = number_of_parameters
+
+        # ── parameter vector sizing ───────────────────────────────────────────
+        if self.type in _FOURIER_TYPES:
+            n_params = 4 * dim
+
+        elif self.type == "cumulative":
+            n_params = 2 * dim + 2
+
+        elif self.type == "LZS":
+            # dim = M plateaus/interferometer arms.
+            # (2M+1) segment durations + M plateau heights — mirrors
+            # schedule_utils.Schedule exactly. Boundary conditions s(0)=0,
+            # s(tf)=1 are built in, so 'mode' has no effect for this type.
+            n_params = 3 * dim + 1
+
+        else:  # power law
+            n_params = 2 * dim
+
+        self.parameters = np.zeros(n_params)
+
+        if random:
+            rng = np.random.default_rng(seed)
+            self.parameters = rng.uniform(-2, 2, size=n_params)
+
+        # ── frequencies ───────────────────────────────────────────────────────
+        if self.type in _FOURIER_TYPES:
+            if self.type == "F-CRAB":
+                # random perturbation around harmonics — avoids local traps
+                rng = np.random.default_rng(seed)
+                self.omegas = (
+                    np.pi
+                    * np.arange(1, dim + 1)
+                    * (1 + rng.uniform(-0.5, 0.5, dim))
+                    / self.tf
+                )
+            else:
+                # exact harmonics: 2π k / tf  for k = 1, ..., dim
+                # applies to 'fourier', 'positive fourier', 'squared fourier'
+                self.omegas = np.pi * np.arange(1, dim + 1) / self.tf
+        # ── precompute jax constants (time, basis) on both grids ──────────────
+        self._basis = {
+            "control": self._build_basis(self.time_ctrl),
+            "state": self._build_basis(self.time),
+        }
+
+        # ── softplus normalisation constant (for 'positive fourier') ─────────
+        # softplus(1) ~ 1.3133 — used to rescale so zero-params -> linear ramp
+        if self.type in _POSITIVE_TYPES:
+            self._sp_norm = float(jax.nn.softplus(jnp.ones(1))[0])
+
+        elif self.type == "LZS":
+            # M = dim, n_seg = 2M+1. Nothing to precompute besides constants
+            # needed inside _get_driving_jax (kept there for clarity/symmetry
+            # with the scipy version).
+            self._lzs_M = dim
+            self._lzs_n_seg = 2 * dim + 1
+
+    # ─────────────────────────────────────────────────────────────────────────
+    def _build_basis(self, time: np.ndarray) -> dict:
+        """JAX time array and parameter-independent basis functions on `time`."""
+        dim = self.number_parameters
+        tf = self.tf
+        basis = {"t": jnp.array(time)}
+
+        if self.type in _FOURIER_TYPES:
+            _omegas = jnp.array(self.omegas)
+            basis["sin"] = jnp.sin(jnp.outer(_omegas, basis["t"]))  # (dim, len(time))
+        elif self.type == "power law":
+            exponents = jnp.arange(1, dim + 1)[:, None]
+            basis["pw"] = (basis["t"][None, :] / tf) ** exponents  # (dim, len(time))
+        elif self.type == "cumulative":
+            u = np.asarray(time) / tf  # numpy, ok here
+            knots = np.linspace(0, 1, dim + 1)
+            idx = np.searchsorted(knots, u, side="right") - 1
+            idx = np.clip(idx, 0, dim - 1)
+            alpha = np.clip((u - knots[idx]) * dim, 0.0, 1.0)
+            basis["cum_idx"] = jnp.array(idx, dtype=jnp.int32)
+            basis["cum_alpha"] = jnp.array(alpha, dtype=jnp.float64)
+        return basis
+
+    def get_driving(self, grid: str = "control") -> tuple:
+        """
+        Returns (h_driver, h_target) as numpy arrays — drop-in replacement.
+
+        grid = 'control' (default): at the cell midpoints self.time_ctrl, one
+            value per propagation step — what the propagator uses.
+        grid = 'state': on self.time (nsteps + 1 points, 0..tf), for plots and
+            for the instantaneous Hamiltonian of observables.
+        """
+        h_driver_jax, h_target_jax = self._get_driving_jax(
+            jnp.array(self.parameters), grid=grid
+        )
+        return np.array(h_driver_jax), np.array(h_target_jax)
+
+    def _get_driving_jax(self, parameters: jnp.ndarray, grid: str = "control") -> tuple:
+        """Internal JAX version — fully differentiable (w.r.t. parameters;
+        `grid` is a static python argument)."""
+        dim = self.number_parameters
+        basis = self._basis[grid]
+        t = basis["t"]
+        tf = self.tf
+
+        # in _get_driving_jax — drop b coefficients, halve parameter count
+        if self.type in ("F-CRAB", "fourier"):
+            n_params = 2 * dim  # was 4*dim: now C^x(dim) + C^z(dim)
+
+            a_drv = parameters[:dim]
+            a_tgt = parameters[dim : 2 * dim]
+
+            corr_driver = jnp.sum(a_drv[:, None] * basis["sin"], axis=0)
+            corr_target = jnp.sum(a_tgt[:, None] * basis["sin"], axis=0)
+
+            h_driver = (1 - t / tf) * (1 + corr_driver)
+            h_target = (t / tf) * (1 + corr_target)
+
+        elif self.type == "positive fourier":
+            # ── softplus-wrapped Fourier — strictly positive ───────────────────
+            # h(t) = ramp(t) * softplus(1 + Fourier_correction) / softplus(1)
+            #
+            # Properties:
+            #   - h(t) > 0  always  (softplus > 0)
+            #   - parameters = 0  ->  h = ramp  (linear annealing recovered)
+            #   - smooth, differentiable everywhere
+            a_drv = parameters[:dim]
+            a_tgt = parameters[dim : 2 * dim]
+
+            raw_driver = jnp.mean(
+                a_drv[:, None] * basis["sin"],
+                axis=0,
+            )
+            raw_target = jnp.mean(
+                a_tgt[:, None] * basis["sin"],
+                axis=0,
+            )
+
+            # softplus shift by +1 so near-zero params ~ linear ramp
+            h_driver = (1 - t / tf) * jax.nn.softplus(1 + raw_driver) / self._sp_norm
+            h_target = (t / tf) * jax.nn.softplus(1 + raw_target) / self._sp_norm
+
+        elif self.type == "squared fourier":
+            a_drv = parameters[:dim]
+            b_drv = parameters[dim : 2 * dim]
+            a_tgt = parameters[2 * dim : 3 * dim]
+            b_tgt = parameters[3 * dim : 4 * dim]
+
+            raw_driver = jnp.mean(
+                a_drv[:, None] * basis["sin"] + b_drv[:, None] * basis["cos"],
+                axis=0,
+            )
+            raw_target = jnp.mean(
+                a_tgt[:, None] * basis["sin"] + b_tgt[:, None] * basis["cos"],
+                axis=0,
+            )
+            # (1 + raw)^2 → always positive, =1 at zero params
+            h_driver = (1 - t / tf) * (1 + raw_driver) ** 2
+            h_target = (t / tf) * (1 + raw_target) ** 2
+
+        elif self.type == "cumulative":
+
+            w_tgt = parameters[:dim]
+            w_drv = parameters[dim : 2 * dim]
+            A_tgt = jax.nn.softplus(parameters[2 * dim])  # strictly positive scale
+            A_drv = jax.nn.softplus(parameters[2 * dim + 1])
+
+            # ── target: monotone increasing, starts at 0 ──────────────────────────
+            p_tgt = jax.nn.softmax(w_tgt)  # (dim,) positive, sums to 1
+            knots_tgt = jnp.concatenate([jnp.zeros(1), jnp.cumsum(p_tgt)])  # (dim+1,)
+            h_left = knots_tgt[basis["cum_idx"]]
+            h_right = knots_tgt[basis["cum_idx"] + 1]
+            h_target = A_tgt * (h_left + basis["cum_alpha"] * (h_right - h_left))
+            # h_target(0) = 0 exactly, h_target(1) = A_tgt (free)
+
+            # ── driver: monotone decreasing, ends at 0 ────────────────────────────
+            p_drv = jax.nn.softmax(w_drv)
+            p_drv_r = p_drv[::-1]  # reverse → decreasing cumsum
+            knots_drv = jnp.concatenate([jnp.zeros(1), jnp.cumsum(p_drv_r)])  # (dim+1,)
+            h_left = knots_drv[basis["cum_idx"]]
+            h_right = knots_drv[basis["cum_idx"] + 1]
+            cum = h_left + basis["cum_alpha"] * (h_right - h_left)
+            h_driver = A_drv * (1.0 - cum)
+            # h_driver(1) = 0 exactly, h_driver(0) = A_drv (free)
+
+            # parameter count: dim  (not 2*dim)
+
+        elif self.type == "LZS":
+            # ── Landau-Zener-Stückelberg interference ansatz ────────────────
+            # Mirrors schedule_utils.Schedule 'LZS' branch exactly:
+            #   - (2M+1) segment durations (softplus -> positive, normalised
+            #     to sum to tf)
+            #   - M plateau heights s_1...s_M (sigmoid -> (0,1))
+            # Piecewise-linear/constant s(t) is built via jnp.where instead
+            # of boolean-mask assignment, since JAX requires static shapes
+            # under jit — differentiable w.r.t. parameters throughout.
+            M = dim
+            n_seg = self._lzs_n_seg
+            raw_durations = parameters[:n_seg]
+            raw_splateaus = parameters[n_seg : n_seg + M]
+
+            durations = jax.nn.softplus(raw_durations)
+            durations = durations / jnp.sum(durations) * tf
+            t_bounds = jnp.concatenate([jnp.zeros(1), jnp.cumsum(durations)])
+            t_bounds = t_bounds.at[-1].set(tf)  # guard against fp drift
+
+            s_plateaus = jax.nn.sigmoid(raw_splateaus)
+            s_way = jnp.concatenate(
+                [jnp.zeros(1), s_plateaus, jnp.ones(1)]
+            )  # length M+2
+
+            s = jnp.zeros_like(t)
+            for seg in range(n_seg):
+                t0 = t_bounds[seg]
+                t1 = t_bounds[seg + 1]
+                mask = (t >= t0) & (t <= t1)
+                if seg % 2 == 0:
+                    # ramp segment: linear interpolation between waypoints
+                    k = seg // 2
+                    s_start, s_end = s_way[k], s_way[k + 1]
+                    denom = jnp.where(t1 > t0, t1 - t0, 1.0)
+                    frac = (t - t0) / denom
+                    seg_val = s_start + (s_end - s_start) * frac
+                else:
+                    # plateau segment: constant value
+                    k = (seg + 1) // 2
+                    seg_val = jnp.full_like(t, s_way[k])
+                s = jnp.where(mask, seg_val, s)
+
+            h_driver = 1.0 - s
+            h_target = s
+
+        else:  # power law
+            corr_driver = jnp.mean(parameters[:dim, None] * basis["pw"], axis=0)
+            corr_target = jnp.mean(
+                parameters[dim : 2 * dim, None] * basis["pw"], axis=0
+            )
+
+            h_driver = (1 - t / tf) * (1 + corr_driver)
+            h_target = (t / tf) * (1 + corr_target)
+
+        return h_driver, h_target
+
+    # ─────────────────────────────────────────────────────────────────────────
+    def get_lzs_waypoints(self):
+        """
+        Diagnostic helper (LZS type only): returns (t_bounds, s_way) — the
+        segment boundary times and s-values actually used by get_driving(),
+        decoded from the current self.parameters. Mirrors
+        schedule_utils.Schedule.get_lzs_waypoints(); returned as numpy arrays.
+        """
+        if self.type != "LZS":
+            raise ValueError("get_lzs_waypoints() only valid for type='LZS'")
+        dim = self.number_parameters
+        M = dim
+        n_seg = self._lzs_n_seg
+        raw_durations = self.parameters[:n_seg]
+        raw_splateaus = self.parameters[n_seg : n_seg + M]
+
+        durations = np.log1p(np.exp(raw_durations))
+        durations = durations / durations.sum() * self.tf
+        t_bounds = np.concatenate(([0.0], np.cumsum(durations)))
+        t_bounds[-1] = self.tf
+
+        s_plateaus = 1.0 / (1.0 + np.exp(-raw_splateaus))
+        s_way = np.concatenate(([0.0], s_plateaus, [1.0]))
+        return t_bounds, s_way
+
+    # ─────────────────────────────────────────────────────────────────────────
+    def load(self, parameters: np.ndarray):
+        if parameters.shape[0] == self.parameters.shape[0]:
+            self.parameters = parameters.copy()
+        else:
+            raise ValueError(
+                f"Shape mismatch: got {parameters.shape[0]}, "
+                f"expected {self.parameters.shape[0]}"
+            )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+class JaxSchedulerModel(JaxSchedule):
+    """
+    JAX equivalent of SchedulerModel.
+    - Uses jax.scipy.linalg.expm + lax.scan for the time evolution
+    - Provides exact gradients via jax.grad — no finite differences
+    - All public outputs (psi, energy, history, get_driving) are numpy arrays
+      so the rest of your pipeline works without changes
+
+    Supported types: 'fourier', 'F-CRAB', 'positive fourier', 'power law', 'LZS'
+    """
+
+    def __init__(
+        self,
+        initial_state: np.ndarray,
+        target_hamiltonian: scipy.sparse.spmatrix,
+        initial_hamiltonian: scipy.sparse.spmatrix,
+        reference_hamiltonian: scipy.sparse.spmatrix,
+        tf: float,
+        number_of_parameters: int,
+        nsteps: int,
+        type: str,
+        seed: int,
+        mode: Optional[str] = "annealing ansatz",
+        random: Optional[bool] = False,
+    ):
+        self.initial_state = initial_state
+        self.target_hamiltonian = target_hamiltonian
+        self.initial_hamiltonian = initial_hamiltonian
+        self.reference_hamiltonian = reference_hamiltonian
+
+        super().__init__(
+            tf=tf,
+            type=type,
+            number_of_parameters=number_of_parameters,
+            nsteps=nsteps,
+            seed=seed,
+            mode=mode,
+            random=random,
+        )
+
+        # ── convert sparse hamiltonians to dense jax arrays ───────────────────
+        self._H_driver = jnp.array(initial_hamiltonian.toarray(), dtype=jnp.complex128)
+        self._H_target = jnp.array(target_hamiltonian.toarray(), dtype=jnp.complex128)
+        self._H_ref = jnp.array(reference_hamiltonian.toarray(), dtype=jnp.complex128)
+        self._psi_init = jnp.array(initial_state, dtype=jnp.complex128)
+        self._dt = jnp.float64(self.dt)
+
+        # ── compile forward + gradient ────────────────────────────────────────
+        self._forward_jax = jax.jit(self._build_forward())
+        self._grad_jax = jax.jit(jax.grad(self._build_forward()))
+
+        # warm up JIT
+        _p = jnp.array(self.parameters)
+        self._forward_jax(_p).block_until_ready()
+        self._grad_jax(_p).block_until_ready()
+        print("JIT compilation done.")
+
+        # ── state ─────────────────────────────────────────────────────────────
+        self.energy = 1000.0
+        self.psi = None
+
+        # memory — all stored as numpy for compatibility
+        self.history = []
+        self.history_psi = []
+        self.history_drivings = []
+        self.history_parameters = []
+        self.history_run = []
+        self.run_number = 0
+
+    # ─────────────────────────────────────────────────────────────────────────
+    def _build_forward(self):
+        """Closure that captures jax arrays — returns a pure jax function."""
+        H_driver = self._H_driver
+        H_target = self._H_target
+        H_ref = self._H_ref
+        psi_init = self._psi_init
+        dt = self._dt
+        nsteps = self.nsteps
+        get_driving = self._get_driving_jax
+
+        def forward(parameters):
+            # control grid: step i uses the schedule at the midpoint of cell i
+            h_driver, h_target = get_driving(parameters)
+
+            # we shouldn't use this
+            def step(psi, i):
+                H_t = h_driver[i] * H_driver + h_target[i] * H_target
+                psi = expm(-1j * dt * H_t) @ psi
+                return psi, None
+
+            psi_final, _ = jax.lax.scan(step, psi_init, jnp.arange(nsteps))
+            energy = (psi_final.conj() @ H_ref @ psi_final).real
+            return energy
+
+        return forward
+
+    # ─────────────────────────────────────────────────────────────────────────
+    def forward(self, parameters: np.ndarray) -> float:
+        """
+        Drop-in replacement for SchedulerModel.forward.
+        Accepts and returns numpy/python scalars — scipy compatible.
+        """
+        self.parameters = parameters
+        p = jnp.array(parameters)
+
+        energy = float(self._forward_jax(p))
+        self.energy = energy
+        self.psi = self._get_final_psi(p)
+        self.run_number += 1
+        return energy
+
+    def _get_final_psi(self, parameters: jnp.ndarray) -> np.ndarray:
+        """Re-run evolution and return final state as numpy array."""
+        h_driver, h_target = self._get_driving_jax(parameters)
+        H_driver, H_target = self._H_driver, self._H_target
+        dt = self._dt
+
+        # we shoundn't use this since it's a dense matrix multiplication
+        def step(psi, i):
+            H_t = h_driver[i] * H_driver + h_target[i] * H_target
+            psi = expm(-1j * dt * H_t) @ psi
+            return psi, None
+
+        psi_final, _ = jax.lax.scan(step, self._psi_init, jnp.arange(self.nsteps))
+        return np.array(psi_final)
+
+    # ─────────────────────────────────────────────────────────────────────────
+    def gradient(self, parameters: np.ndarray) -> np.ndarray:
+        """Exact gradient via jax.grad — pass as jac= to scipy.optimize.minimize."""
+        return np.array(self._grad_jax(jnp.array(parameters)), dtype=np.float64)
+
+    # ─────────────────────────────────────────────────────────────────────────
+    def callback(self, *args):
+        self.history.append(self.energy)
+        self.history_parameters.append(self.parameters.copy())
+        self.history_drivings.append(self.get_driving())
+        self.history_psi.append(self.psi.copy())
+        self.history_run.append(self.run_number)
+        print(self.energy)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+class JaxTrainer:
+    """
+    Handles optimization of a JaxSchedulerModel.
+    Call trainer.run() and get results back as plain numpy/python objects.
+    """
+
+    def __init__(
+        self,
+        model: JaxSchedulerModel,
+        maxiter: int = 1000,
+        tol: float = 1e-6,
+        ftol: float = 1e-9,
+        gtol: float = 1e-6,
+        verbose: bool = True,
+    ):
+        self.model = model
+        self.maxiter = maxiter
+        self.tol = tol
+        self.ftol = ftol
+        self.gtol = gtol
+        self.verbose = verbose
+        self.result = None
+
+    # ─────────────────────────────────────────────────────────────────────────
+    def run(self) -> dict:
+        """
+        Run L-BFGS-B with exact gradients.
+        Returns a dict with all results as numpy arrays — no jax objects.
+        """
+        res = minimize(
+            self.model.forward,
+            self.model.parameters,
+            jac=self.model.gradient,
+            method="L-BFGS-B",
+            tol=self.tol,
+            callback=self.model.callback if self.verbose else None,
+            options={
+                "maxiter": self.maxiter,
+                "ftol": self.ftol,
+                "gtol": self.gtol,
+            },
+        )
+        self.result = res
+
+        # final forward pass to sync model state
+        self.model.forward(res.x)
+        h_driver, h_target = self.model.get_driving(grid="state")
+        h_driver_ctrl, h_target_ctrl = self.model.get_driving(grid="control")
+
+        if self.verbose:
+            print(f"\nOptimization success : {res.success}")
+            print(f"Final energy         : {res.fun:.6f}")
+            print(f"Message              : {res.message}")
+
+        return {
+            "success": bool(res.success),
+            "message": res.message,
+            "n_iterations": int(res.nit),
+            "n_evals": int(res.nfev),
+            "energy": float(res.fun),
+            "parameters": np.array(res.x),
+            "psi": self.model.psi.copy(),
+            # schedule on the state grid `time` (plots, observables) ...
+            "h_driver": h_driver,
+            "h_target": h_target,
+            "time": self.model.time.copy(),
+            # ... and at the cell midpoints `time_ctrl` (what was propagated)
+            "h_driver_ctrl": h_driver_ctrl,
+            "h_target_ctrl": h_target_ctrl,
+            "time_ctrl": self.model.time_ctrl.copy(),
+            "history_energy": list(self.model.history),
+            "history_parameters": [p.copy() for p in self.model.history_parameters],
+            "history_drivings": self.model.history_drivings,
+            "history_psi": [p.copy() for p in self.model.history_psi],
+        }
+
+
+# src/jax_utils.py  — memory-safe version for large n
+
+
+def _build_binary_reps(n: int):
+    """Same as before — lightweight, O(4^n) int8."""
+    n_paulis = 4**n
+    # this are the values of X and Z, if X is applied you get a 1 in the first slot.
+    # Z is a 1 in the right slot, Y (up to a phase) is both ([1,1]). Identiy is nothing ([0,0])
+    pauli_map = np.array([[0, 0], [1, 0], [1, 1], [0, 1]], dtype=np.int8)
+    # mapping the pauli string with indices
+    indices = np.arange(n_paulis, dtype=np.int32)
+    # the binary encoding for the Xs and Zs (a,b)
+    a_vecs = np.zeros((n_paulis, n), dtype=np.int8)
+    b_vecs = np.zeros((n_paulis, n), dtype=np.int8)
+    #
+    tmp = indices.copy()
+
+    for k in range(n - 1, -1, -1):  # it goes downwards, following the start, stop, step
+        digit = (
+            tmp % 4
+        )  # start from the last q4it, every number from 0 to 3 give a different pauli (or identity)
+        a_vecs[:, k] = pauli_map[digit, 0]  # initialize it in binary form for a and b
+        b_vecs[:, k] = pauli_map[digit, 1]
+        tmp = tmp // 4  # go to the next q4it, to repet the process
+    return a_vecs, b_vecs
+
+
+def _build_pauli_indices_only(n: int):
+    """
+    Returns ONLY:
+      a_int : (4^n,) int32  — integer X-part (for XOR)
+      b_vecs: (4^n, n) int8 — Z-part (to compute signs on the fly per batch)
+    Does NOT build the (4^n, 2^n) signs table.
+    """
+    a_vecs, b_vecs = _build_binary_reps(n)
+    powers = (2 ** np.arange(n - 1, -1, -1)).astype(
+        np.int32
+    )  # this is important to give the corresponding 4inary integer
+    a_int = (a_vecs @ powers).astype(np.int32)
+    return a_int, b_vecs  # b_vecs is (4^n, n) int8 — fine for n=12: 16M×12 = 192 MB
+
+
+class SREJax:
+    """
+    Stabilizer Rényi Entropy M_2, memory-safe for large n.
+
+    Signs are computed on-the-fly per batch instead of precomputed for all
+    (4^n, 2^n) pairs, reducing peak RAM from O(4^n * 2^n) to O(batch * 2^n).
+
+    Parameters
+    ----------
+    n_qubits   : int
+    batch_size : int  — Paulis per JAX call. 256–1024 works for n=12 on CPU.
+    """
+
+    def __init__(self, n_qubits: int, batch_size: int = 512):
+        self.n = n_qubits
+        self.dim = 2**n_qubits
+        self.n_paulis = 4**n_qubits
+        self.batch_size = batch_size
+
+        print(
+            f"Building Pauli index tables for n={n_qubits} ({self.n_paulis:,} Paulis)..."
+        )
+        a_int, b_vecs = _build_pauli_indices_only(n_qubits)
+
+        self._a_int = jnp.array(a_int, dtype=jnp.int32)  # (4^n,)
+        self._b_vecs = jnp.array(b_vecs, dtype=jnp.int8)  # (4^n, n) — 192 MB for n=12
+        self._x_idx = jnp.arange(self.dim, dtype=jnp.int32)
+
+        # precompute bit decomposition of x for sign computation
+        # bit_matrix[x, k] = k-th bit of x  — shape (2^n, n), tiny
+        x_vals = np.arange(self.dim, dtype=np.int32)
+        bit_matrix = (
+            (x_vals[:, None] >> np.arange(n_qubits - 1, -1, -1)[None, :]) & 1
+        ).astype(np.int8)
+        self._bit_matrix = jnp.array(bit_matrix, dtype=jnp.int8)  # (2^n, n)
+
+        self._pauli_weight = self._compute_pauli_weights()
+        print("Done.")
+
+    @partial(jax.jit, static_argnums=(0,))
+    def _xi_batch(self, psi, a_int_batch, b_vecs_batch):
+        """
+        psi          : (2^n,) complex128
+        a_int_batch  : (B,)   int32
+        b_vecs_batch : (B, n) int8
+        Returns      : (B,)   float64
+        """
+        # XOR: psi[x XOR a] for each Pauli
+        x_xor_a = jnp.bitwise_xor(
+            self._x_idx[None, :], a_int_batch[:, None]
+        )  # (B, 2^n)
+        psi_flipped = psi[x_xor_a]  # (B, 2^n)
+
+        # signs: (-1)^{b . bits(x)} — computed on the fly
+        # b_dot_x[p, x] = (b_vecs_batch[p] @ bit_matrix[x]) mod 2
+        b_dot_x = (b_vecs_batch.astype(jnp.int32) @ self._bit_matrix.T) % 2  # (B, 2^n)
+        signs = 1 - 2 * b_dot_x  # (B, 2^n)
+
+        # <psi| Z^b X^a |psi>, real for an even number of Y and purely
+        # imaginary for an odd one
+        zx = jnp.einsum(
+            "x,px,px->p", psi.conj(), signs.astype(jnp.float64), psi_flipped
+        )  # (B,)
+
+        # the Hermitian Pauli string is P = (-i)^{n_Y} Z^b X^a (Y = -i Z X),
+        # with n_Y = a . b the number of sites where both X and Z act
+        a_bits = (
+            a_int_batch[:, None] >> jnp.arange(self.n - 1, -1, -1)[None, :]
+        ) & 1  # (B, n)
+        n_y = jnp.sum(a_bits * b_vecs_batch.astype(jnp.int32), axis=1)  # (B,)
+        phase = jnp.array([1, -1j, -1, 1j], dtype=jnp.complex128)[n_y % 4]
+
+        xi = (phase * zx).real  # (B,)
+        return xi
+
+    def characteristic_function(self, psi: np.ndarray) -> np.ndarray:
+        psi = jnp.array(psi, dtype=jnp.complex128)
+        xi_all = np.empty(self.n_paulis, dtype=np.float64)
+        for start in range(0, self.n_paulis, self.batch_size):
+            end = min(start + self.batch_size, self.n_paulis)
+            xi_all[start:end] = np.array(
+                self._xi_batch(psi, self._a_int[start:end], self._b_vecs[start:end])
+            )
+        return xi_all
+
+    def sre(self, psi: np.ndarray) -> float:
+        """M_2(psi) = -log2(sum_P Xi(P)^4) - n*log2(2)  [in nats if using log]"""
+        xi = self.characteristic_function(psi)
+        return float(-np.log(np.sum(xi**4)) + self.n * np.log(2.0))
+
+    def __call__(self, psi: np.ndarray) -> float:
+        return self.sre(psi)
+
+    def _compute_pauli_weights(self) -> np.ndarray:
+        """
+        Weight (# non-identity qubits) of every Pauli, indexed exactly like
+        a_int / b_vecs / characteristic_function's output.
+        """
+        tmp = np.arange(self.n_paulis, dtype=np.int64)
+        weight = np.zeros(self.n_paulis, dtype=np.int32)
+        for _ in range(self.n):
+            # we start considering the value of the last qu4it
+            digit = tmp % 4
+            # if is different from zero it has a pauli so a +1 in the weight
+            weight += digit != 0
+            # let's move to the next q4it
+            tmp //= 4
+        return weight
+
+    def average_pauli_weight(self, psi: np.ndarray) -> float:
+        """
+        <k>_psi = sum_P [Xi(P)^2 / 2^n] * weight(P)
+
+        Expectation of the Pauli weight under the probability distribution
+        Xi(P) = <psi|P|psi>^2 / 2^n over the full 4^n-element Pauli group
+        (this distribution sums to 1 — standard identity for pure states).
+        """
+        xi = self.characteristic_function(psi)
+        prob = xi**2 / np.sum(xi**2)
+        return float(np.sum(prob * self._pauli_weight))
+
+    def weight_distribution(self, psi: np.ndarray) -> np.ndarray:
+        """
+        W(k) = sum_{wt(P)=k} Xi(P)^2 / 2^n, shape (n+1,), sums to 1.
+        This is exactly <psi|P|psi>^2 binned by Pauli weight.
+        """
+        xi = self.characteristic_function(psi)
+        prob = xi**2 / np.sum(xi**2)
+        return np.bincount(self._pauli_weight, weights=prob, minlength=self.n + 1)
+
+    def magic_per_weight(self, psi: np.ndarray, tol: float = 1e-2) -> dict:
+        """
+        M_2(k) = -log( sum_{wt(P)=k} Xi(P)^4 / N_k ),
+        N_k = #{P : wt(P)=k, |<psi|P|psi>| = 1}  (psi is an eigenstate of P).
+        NaN where N_k = 0 — the measure is undefined there (no deterministic
+        weight-k Pauli for this state), not zero.
+
+        Also returns "m2_per_weight_2n_norm": same numerator normalized by 2^n
+        like the full SRE (-log(sum Xi^4) + n*log2). Always defined, but NOT a
+        linear decomposition of the total M_2 — a per-weight diagnostic only.
+        """
+        xi = self.characteristic_function(psi)
+        xi4 = xi**4
+        xi2 = xi**2
+        w = self._pauli_weight
+        is_nonzero = np.abs(xi) > tol
+
+        sum_xi4 = np.bincount(w, weights=xi4, minlength=self.n + 1)
+        sum_xi2 = np.bincount(w, weights=xi2, minlength=self.n + 1)
+        counts_nonzero = np.bincount(w[is_nonzero], minlength=self.n + 1)
+        counts_total = np.bincount(w, minlength=self.n + 1)
+
+        with np.errstate(divide="ignore", invalid="ignore"):
+            m2_k = -np.log((sum_xi4) / (sum_xi2))
+
+        sector_prob = sum_xi4 / sum_xi2
+        m2_k[sector_prob < tol] = np.nan  # e.g. <1 part in a million of total weight
+
+        m2_k_norm = -np.log(sum_xi4) + self.n * np.log(2.0)
+
+        return {
+            "m2_per_weight": m2_k,
+            "m2_per_weight_2n_norm": m2_k_norm,
+            "counts_pm1": counts_nonzero,
+            "counts_total": counts_total,
+            "sum_xi2": sum_xi2,
+        }
+
+    def characteristic_function_per_weight(self, psi: np.ndarray, k: int) -> dict:
+        """
+        Xi(P)^2 / \sum_P Xi(P)^2 for each weight-k Pauli — same normalization as the full
+        Pauli spectrum (weight_distribution sums this over all P in a bin;
+        this returns the un-summed per-Pauli values for wt(P) = k).
+        Entries sum to weight_distribution(psi)[k], not to 1.
+
+        Returns
+        -------
+        dict with:
+            "prob"    : (N_k,) Xi(P)^2 / 2^n for each weight-k Pauli
+            "xi"      : (N_k,) raw Xi(P) values for those Paulis
+            "a_int"   : (N_k,) X-part index for those Paulis
+            "b_vecs"  : (N_k, n) Z-part index for those Paulis
+            "indices" : (N_k,) positions into the full 4^n Pauli ordering
+        """
+        if not (0 <= k <= self.n):
+            raise ValueError(f"k must be in [0, {self.n}], got {k}")
+
+        xi = self.characteristic_function(psi)
+        mask = self._pauli_weight == k
+        indices = np.nonzero(mask)[0]
+
+        xi_k = xi[mask]
+        prob = xi_k**4 / (2**self.n)
+
+        return {
+            "prob": prob,
+            "xi": xi_k,
+            "a_int": np.array(self._a_int)[indices],
+            "b_vecs": np.array(self._b_vecs)[indices],
+            "indices": indices,
+        }

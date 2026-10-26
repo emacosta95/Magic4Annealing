@@ -16,6 +16,7 @@ from src.landscape_utils import (
     max_magic_landscape,
     plot_max_magic_landscape,
 )
+from src.time_grid import make_time_grids
 from src.utils import Z2SymmetricSector
 
 
@@ -116,7 +117,7 @@ def build_schedule(theta, t):
 
 # theta1, theta2, theta3 = your three parameter vectors (1D arrays of the same size)
 # build_schedule = your function mapping theta -> schedule
-# times, delta_t, psi0, driver_hamiltonian_s, target_hamiltonian_s = your simulation setup
+# times, times_ctrl, delta_t, psi0, driver_hamiltonian_s, target_hamiltonian_s = your simulation setup
 
 
 def energy_fn_wrapper(theta):
@@ -124,6 +125,7 @@ def energy_fn_wrapper(theta):
         theta,
         build_schedule,
         times,
+        times_ctrl,
         delta_t,
         psi_init_s,
         driver_hamiltonian_s,
@@ -136,6 +138,7 @@ def max_magic_fn_wrapper(theta):
         theta,
         build_schedule,
         times,
+        times_ctrl,
         delta_t,
         psi_init_s,
         sre,
@@ -184,9 +187,10 @@ tau = T  # try a range of tau; the ring is expected to need LARGE tau
 # for a linear ramp to reach the ground state (exponential
 # slowdown at the AC) -- this is exactly the motivation for
 # optimal control / LZS below.
-time_steps = int(10 * tau)
-times = np.linspace(0, tau, time_steps)
-delta_t = times[1] - times[0]
+time_steps = int(10 * tau)  # number of propagation steps
+# midpoint rule (src/time_grid.py): states on `times` (time_steps + 1 points,
+# 0..tau); the schedule driving each step is evaluated at `times_ctrl`
+times, times_ctrl, delta_t = make_time_grids(tau, time_steps)
 
 # ── optimization parameters ───────────────────────────────────────────────────
 number_parameters = 2  # M=2 plateaus/arms -> n_params = 3*M+1 = 7, matching

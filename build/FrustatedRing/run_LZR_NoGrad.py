@@ -2,8 +2,8 @@ import sys
 import time
 
 import numpy as np
-from scipy.sparse.linalg import eigsh, expm_multiply
-from tqdm import trange
+from scipy.sparse.linalg import eigsh
+from tqdm import tqdm
 
 from src.annealing_utils import (
     get_driver_hamiltonian,
@@ -12,6 +12,7 @@ from src.annealing_utils import (
 from src.hamiltonian_utils import frustrated_ring_jij_hz
 from src.jax_utils import SREJax
 from src.schedule_utils import SchedulerModel, SchedulerTrainer
+from src.time_grid import make_time_grids, midpoint_evolution, subsample_indices
 from src.utils import EntanglementEntropy, Z2SymmetricSector
 
 start = time.perf_counter()
@@ -57,9 +58,11 @@ tau = T  # try a range of tau; the ring is expected to need LARGE tau
 # for a linear ramp to reach the ground state (exponential
 # slowdown at the AC) -- this is exactly the motivation for
 # optimal control / LZS below.
-time_steps = int(100 * tau)
-times = np.linspace(0, tau, time_steps)
-delta_t = times[1] - times[0]
+time_steps = int(100 * tau)  # number of propagation steps
+# midpoint rule (src/time_grid.py): the states live on `times`
+# (time_steps + 1 points, 0..tau); the schedule that drives each step is
+# evaluated at the cell midpoints `times_ctrl`
+times, times_ctrl, delta_t = make_time_grids(tau, time_steps)
 
 number_parameters = 2  # M=2 plateaus/arms -> n_params = 3*M+1 = 7, matching
 # Werner et al.'s reduction from Cote et al.'s ~100-parameter
@@ -82,27 +85,37 @@ maxiter = 500
 trainer = SchedulerTrainer(model, maxiter=maxiter, method="COBYLA", verbose=True)
 opt_results = trainer.run()
 
-h_driver, h_target = model.get_driving()
-schedule = h_target
+# s(t) at the cell midpoints (what the propagator uses) and on the state
+# grid (instantaneous Hamiltonian of the observables, plots)
+schedule_ctrl = model.get_driving(grid="control")[1]
+schedule = model.get_driving(grid="state")[1]
 
 dim_s = driver_hamiltonian_s.shape[0]
-psi = psi_init_s.copy()
 theta = opt_results["parameters"]
-spectrum = np.zeros((time_steps, nlevels))
-energy = np.zeros(time_steps)
-probabilities = np.zeros((time_steps, nlevels))
-psi_history_s = np.zeros((time_steps, dim_s), dtype=complex)
-eigenstates_history_s = np.zeros((time_steps, dim_s, nlevels), dtype=complex)
+n_times = len(times)  # time_steps + 1 states: t = 0, ..., tau
+spectrum = np.zeros((n_times, nlevels))
+energy = np.zeros(n_times)
+probabilities = np.zeros((n_times, nlevels))
+psi_history_s = np.zeros((n_times, dim_s), dtype=complex)
+eigenstates_history_s = np.zeros((n_times, dim_s, nlevels), dtype=complex)
 
 sre = SREJax(n_qubits=nqubits - 1, batch_size=1000)
 entanglement_entropy = EntanglementEntropy(nqubits=nqubits, n_A=nqubits // 2)
 
 
-for i, t in enumerate(times):
+# psi is the state at times[i], i = 0..time_steps (i = 0: initial state)
+for i, psi in midpoint_evolution(
+    psi_init_s,
+    1 - schedule_ctrl,
+    schedule_ctrl,
+    delta_t,
+    driver_hamiltonian_s,
+    target_hamiltonian_s,
+):
+    # instantaneous Hamiltonian at the time of the state, H(s(times[i]))
     hamiltonian_t = (1 - schedule[i]) * driver_hamiltonian_s + (
         schedule[i]
     ) * target_hamiltonian_s
-    psi = expm_multiply(-1j * delta_t * hamiltonian_t, psi)
 
     spectrum_t, eigenstates_t = eigsh(
         hamiltonian_t.astype(complex), which="SA", k=nlevels
@@ -131,13 +144,14 @@ entanglement = []
 # subsample if time_steps is large — SRE is O(4^N) per call
 stride = max(1, 10)
 
-for i in trange(0, time_steps, stride):
+idx_sub = subsample_indices(time_steps, stride)  # includes t = 0 and t = tau
+for i in tqdm(idx_sub):
     state_full = sector.lift(psi_history_s[i])
     magic.append(sre(psi_history_s[i]))
     entanglement.append(entanglement_entropy.von_neumann(state_full))
 
 
-time_sub = times[::stride]
+time_sub = times[idx_sub]
 
 
 # formateo consistente de T para evitar problemas de precisión en el nombre
@@ -151,12 +165,16 @@ np.savez(
     nombre_archivo,
     T=np.array([T]),  # guardamos T explícitamente también, por seguridad
     theta=np.array([theta]),
-    times=times,
+    dt=np.array([delta_t]),
+    nsteps=np.array([time_steps]),
+    times=times,  # state grid: every time-resolved observable below
+    times_ctrl=times_ctrl,  # cell midpoints: where schedule_ctrl is sampled
     evo_energy=energy,
     e0=e0,
     e1=e1,
     gap=gap,
-    schedule=schedule,
+    schedule=schedule,  # s on `times` (plots, spectrum)
+    schedule_ctrl=schedule_ctrl,  # s on `times_ctrl` (what was propagated)
     p0=p0,
     p1=p1,
     time_sub=time_sub,

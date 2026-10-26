@@ -2,52 +2,31 @@ import sys
 import time
 
 import numpy as np
-from scipy.sparse.linalg import eigsh, expm_multiply
-from tqdm import trange
+from tqdm import tqdm
 
-from src.annealing_utils import (
-    get_driver_hamiltonian,
-    get_longitudinal_hamiltonian,
+from src.free_fermions_utils import NambuIsing1D
+from src.time_grid import (
+    make_time_grids,
+    nambu_midpoint_evolution,
+    subsample_indices,
 )
-from src.hamiltonian_utils import frustrated_ring_jij_hz
-from src.jax_utils import SREJax
-from src.utils import EntanglementEntropy, Z2SymmetricSector
 
 start = time.perf_counter()
 
 T = int(sys.argv[1])
 
-N = int(sys.argv[2])  # odd; N=9,11,13 feasible for full 2^N exact diagonalization
+N = int(sys.argv[2])  # odd; cost is O(N^3) per time step, no 2^N limit
 J, JL, JR = 1.0, 0.5, 0.45
 
-jij, hz = frustrated_ring_jij_hz(N, J, JL, JR)
-
 nqubits = N
-target_hamiltonian = get_longitudinal_hamiltonian(
-    jij, hz
-)  # sparse scipy matrix, full 2^N space
-driver_hamiltonian = get_driver_hamiltonian(
-    nqubits=nqubits
-)  # sparse scipy matrix, full 2^N space
+# Nambu/BdG representation of the same ring as frustrated_ring_jij_hz, in the
+# spin convention of src.free_fermions_utils (driver = -sum_i sz_i,
+# target = -sum_i J_i sx_i sx_{i+1}). pbc=True fixes the even-parity sector,
+# i.e. the Z2 +1 sector the spin-basis scripts project onto.
+nambu = NambuIsing1D.frustrated_ring(N, J, JL, JR)
 
-
-# The uniform superposition (driver ground state) is manifestly +1 under the
-# global flip Pi = prod_i X_i, so annealing dynamics from this initial state
-# stays confined to the +1 sector for all s in [0,1] (H(s) commutes with Pi
-# throughout, since target has only ZZ terms and driver only X terms).
-sector = Z2SymmetricSector(nqubits, sign=+1)
-
-dim = 2**nqubits
-psi_init_full = np.ones(dim, dtype=complex) / np.sqrt(dim)
-assert sector.check_confined(
-    psi_init_full
-), "initial state is not confined to the +1 sector!"
-
-target_hamiltonian_s = sector.project(
-    target_hamiltonian
-)  # sparse, dim_sector x dim_sector
-driver_hamiltonian_s = sector.project(driver_hamiltonian)
-psi_init_s = sector.project(psi_init_full)
+# driver ground state: initial state of the anneal
+_, w_init = nambu.diagonalize(1.0, 0.0)
 
 
 # ── time evolution parameters ─────────────────────────────────────────────────
@@ -56,46 +35,48 @@ tau = T  # try a range of tau; the ring is expected to need LARGE tau
 # for a linear ramp to reach the ground state (exponential
 # slowdown at the AC) -- this is exactly the motivation for
 # optimal control / LZS below.
-time_steps = int(100 * tau)
-times = np.linspace(0, tau, time_steps)
-delta_t = times[1] - times[0]
+time_steps = int(100 * tau)  # number of propagation steps
+# midpoint rule (src/time_grid.py): the states live on `times`
+# (time_steps + 1 points, 0..tau); the schedule that drives each step is
+# evaluated at the cell midpoints `times_ctrl`
+times, times_ctrl, delta_t = make_time_grids(tau, time_steps)
 
 
-dim_s = driver_hamiltonian_s.shape[0]
-psi = psi_init_s.copy()
+# linear schedule s = t / tau, evaluated analytically on both grids
+schedule = times / tau  # state grid (observables)
+schedule_ctrl = times_ctrl / tau  # cell midpoints (propagation)
 
-spectrum = np.zeros((time_steps, nlevels))
-energy = np.zeros(time_steps)
-schedule = np.zeros(time_steps)
-probabilities = np.zeros((time_steps, nlevels))
-psi_history_s = np.zeros((time_steps, dim_s), dtype=complex)
-eigenstates_history_s = np.zeros((time_steps, dim_s, nlevels), dtype=complex)
+# subsample if time_steps is large — Majorana sampling is O(N^4) per sample
+stride = max(1, 10)
+n_samples = 1000  # Majorana samples per SRE estimate (statistical error ~ 1/sqrt)
 
-sre = SREJax(n_qubits=nqubits - 1, batch_size=1000)
-entanglement_entropy = EntanglementEntropy(nqubits=nqubits, n_A=nqubits // 2)
+n_times = len(times)  # time_steps + 1 states: t = 0, ..., tau
+idx_sub = subsample_indices(time_steps, stride)  # includes t = 0 and t = tau
+sub_position = {int(i): k for k, i in enumerate(idx_sub)}
 
+spectrum = np.zeros((n_times, nlevels))
+energy = np.zeros(n_times)
+probabilities = np.zeros((n_times, nlevels))
+# only the Bogoliubov vacuum W1 [2N, N] at the subsampled steps is kept
+w1_history = np.zeros((len(idx_sub), 2 * nqubits, nqubits), dtype=complex)
 
-for i, t in enumerate(times):
-    schedule[i] = t / tau
-    hamiltonian_t = (1 - schedule[i]) * driver_hamiltonian_s + (
-        schedule[i]
-    ) * target_hamiltonian_s
-    psi = expm_multiply(-1j * delta_t * hamiltonian_t, psi)
+# w is the Bogoliubov matrix at times[i], i = 0..time_steps (i = 0: w_init,
+# passed explicitly: the first control value is s(dt/2), not s = 0)
+for i, w in nambu_midpoint_evolution(
+    nambu, w_init, 1 - schedule_ctrl, schedule_ctrl, delta_t
+):
+    # instantaneous Hamiltonian at the time of the state, H(s(times[i]))
+    h_driver_t, h_target_t = 1 - schedule[i], schedule[i]
+    w1 = w[:, :nqubits]
 
-    spectrum_t, eigenstates_t = eigsh(
-        hamiltonian_t.astype(complex), which="SA", k=nlevels
+    # lowest physical levels (even sector) and their populations
+    spectrum[i], probabilities[i], _ = nambu.level_probabilities(
+        w1, h_driver_t, h_target_t, n_levels=nlevels
     )
-    order = np.argsort(spectrum_t)
-    spectrum[i] = spectrum_t[order]
-    eigenstates_raw = eigenstates_t[:, order].astype(complex)
-    eigenstates_history_s[i] = eigenstates_raw
-
-    probabilities[i] = (
-        np.einsum("i,ia->a", psi.conj(), eigenstates_raw)
-        * np.einsum("i,ia->a", psi.conj(), eigenstates_raw).conj()
-    ).real
-    energy[i] = np.real(np.vdot(psi, hamiltonian_t @ psi))
-    psi_history_s[i] = psi
+    hamiltonian_t = nambu.hamiltonian(h_driver_t, h_target_t)
+    energy[i] = np.real(np.trace(w1.conj().T @ hamiltonian_t @ w1))
+    if i in sub_position:
+        w1_history[sub_position[i]] = w1
 
 e0 = spectrum[:, 0]
 e1 = spectrum[:, 1]
@@ -103,24 +84,43 @@ gap = spectrum[:, 1] - spectrum[:, 0]
 p0 = probabilities[:, 0]
 p1 = probabilities[:, 1]
 
+# instantaneous physical ground state at the subsampled steps, as a
+# Bogoliubov vacuum W1 [2N, N] like the evolved state
+gs_history, _, _ = nambu.instantaneous_states(
+    1 - schedule[idx_sub], schedule[idx_sub], level=0
+)
+
 magic = []
+magic_filtered = []
+magic_err = []
 magic_gs_level = []
+magic_gs_level_filtered = []
+magic_gs_level_err = []
 entanglement = []
 entanglement_gs_level = []
 
+# base=np.e -> nats, the unit of the spin-basis scripts
+n_sub = len(idx_sub)
+for k in tqdm(range(n_sub)):
+    sre_k = nambu.sre(w1_history[k], alpha=2, n_samples=n_samples, seed=k, base=np.e)
+    magic.append(sre_k["m_alpha"])
+    magic_filtered.append(sre_k["m_alpha_filtered"])
+    magic_err.append(sre_k["err"])
+    # independent samples from those of the evolved state
+    sre_gs_k = nambu.sre(
+        gs_history[k], alpha=2, n_samples=n_samples, seed=n_sub + k, base=np.e
+    )
+    magic_gs_level.append(sre_gs_k["m_alpha"])
+    magic_gs_level_filtered.append(sre_gs_k["m_alpha_filtered"])
+    magic_gs_level_err.append(sre_gs_k["err"])
+    entanglement.append(
+        nambu.entanglement_entropy(w1_history[k], nqubits // 2, base=np.e)
+    )
+    entanglement_gs_level.append(
+        nambu.entanglement_entropy(gs_history[k], nqubits // 2, base=np.e)
+    )
 
-# subsample if time_steps is large — SRE is O(4^N) per call
-stride = max(1, 10)
-
-for i in trange(0, time_steps, stride):
-    state_full = sector.lift(psi_history_s[i])
-    gs_full = sector.lift(eigenstates_history_s[i, :, 0])
-    magic.append(sre(psi_history_s[i]))
-    magic_gs_level.append(sre(eigenstates_history_s[i, :, 0]))
-    entanglement.append(entanglement_entropy.von_neumann(state_full))
-    entanglement_gs_level.append(entanglement_entropy.von_neumann(gs_full))
-
-time_sub = times[::stride]
+time_sub = times[idx_sub]
 
 
 # formateo consistente de T para evitar problemas de precisión en el nombre
@@ -133,18 +133,26 @@ nombre_archivo = (
 np.savez(
     nombre_archivo,
     T=np.array([T]),  # guardamos T explícitamente también, por seguridad
-    times=times,
+    dt=np.array([delta_t]),
+    nsteps=np.array([time_steps]),
+    times=times,  # state grid: every time-resolved observable below
+    times_ctrl=times_ctrl,  # cell midpoints: where schedule_ctrl is sampled
     evo_energy=energy,
     e0=e0,
     e1=e1,
     gap=gap,
-    schedule=schedule,
+    schedule=schedule,  # s on `times` (plots, spectrum)
+    schedule_ctrl=schedule_ctrl,  # s on `times_ctrl` (what was propagated)
     p0=p0,
     p1=p1,
     time_sub=time_sub,
     magic=magic,
+    magic_filtered=magic_filtered,
+    magic_err=magic_err,
     entanglement=entanglement,
     magic_gs_level=magic_gs_level,
+    magic_gs_level_filtered=magic_gs_level_filtered,
+    magic_gs_level_err=magic_gs_level_err,
     entanglement_gs_level=entanglement_gs_level,
 )
 

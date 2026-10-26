@@ -172,10 +172,14 @@ class NambuIsing1D:
         """Piecewise-constant BdG propagation:  i dW/dt = 2 H_nambu(t) W.
 
         Args:
-            h_driver, h_target: [nsteps] schedules, exactly what
+            h_driver, h_target: [nsteps] schedules on the CONTROL grid (cell
+                                midpoints, src/time_grid.py), exactly what
                                 get_driving() returns (Schedule, SparseGRAPEModel).
-            w0:                 [2l,2l] initial Bogoliubov matrix; default is the
-                                ground state of H(t=0).
+            w0:                 [2l,2l] initial Bogoliubov matrix. ALWAYS pass it
+                                (e.g. diagonalize(1.0, 0.0)[1]): the default is
+                                the ground state of H(h_driver[0], h_target[0]),
+                                which on the control grid is H at t = dt/2, not
+                                the driver ground state.
             store_every:        keep a snapshot every n steps (0 = none), to
                                 save memory.
         Returns:
@@ -200,7 +204,9 @@ class NambuIsing1D:
         self, h_driver, h_target, store_every: int = 1, level: int = 0
     ):
         """Instantaneous PHYSICAL eigenstate `level` (0 = ground state) along a
-        schedule, at the same steps as evolve(..., store_every): i % store_every == 0.
+        schedule, at the points i % store_every == 0.  h_driver, h_target must be
+        on the STATE grid (get_driving(grid="state")), so that point i is the
+        instantaneous Hamiltonian at the time of the evolved state i.
 
         Adiabatic reference for the evolved snapshots.  Each state is a
         Bogoliubov vacuum W1 [2l, l] built with excited_vacuum, so past the
@@ -288,7 +294,9 @@ class NambuIsing1D:
         return e_vac + de, occs, (e, w)
 
     def spectrum_along_schedule(self, h_driver, h_target, n_levels: int = 10):
-        """Lowest n_levels physical levels at every schedule point, [nsteps, n_levels].
+        """Lowest n_levels physical levels at every schedule point, [len(h), n_levels].
+        Pass the schedule on the STATE grid (get_driving(grid="state")) to get
+        the spectrum at the times of the evolved states.
 
         Labels are sorted energies: they do NOT track a single adiabatic state
         through a crossing.
@@ -412,7 +420,7 @@ class NambuIsing1D:
     # -----------------------------------------------------------------------
     # 6b. Entanglement entropy
     # -----------------------------------------------------------------------
-    def entanglement_entropy(self, w: np.ndarray, block, base: float = 2.0) -> float:
+    def entanglement_entropy(self, w: np.ndarray, block, base: float = np.e) -> float:
         """Von Neumann entropy S_A of a CONTIGUOUS block of spins (evolving state).
 
         The reduced state of a Gaussian state is Gaussian, with covariance
@@ -438,7 +446,12 @@ class NambuIsing1D:
         return float(-np.sum(p * np.log(p)) / np.log(base))
 
     def eigenstate_entanglement_entropy(
-        self, h_driver: float, h_target: float, block, level: int = 0, base: float = 2.0
+        self,
+        h_driver: float,
+        h_target: float,
+        block,
+        level: int = 0,
+        base: float = np.e,
     ) -> float:
         """S_A of the `level`-th PHYSICAL instantaneous eigenstate of H(h_driver, h_target)
         (level 0 = ground state), same ordering as levels() / level_probabilities().
@@ -579,7 +592,12 @@ class NambuIsing1D:
         return xs, logp
 
     def sre(
-        self, w: np.ndarray, alpha: float = 2, n_samples: int = 2000, seed: int = 0
+        self,
+        w: np.ndarray,
+        alpha: float = 2,
+        n_samples: int = 2000,
+        seed: int = 0,
+        base: float = np.e,
     ):
         """Stabilizer Renyi entropy of the Gaussian state w (Algorithm 1).
 
@@ -590,10 +608,11 @@ class NambuIsing1D:
                       (pi = 1/D each for a pure Gaussian state) removed and
                       pi renormalised; subtracted exactly from the estimate.
 
-        Returns dict(m_alpha, m_alpha_filtered, err), results in bits, err =
-        standard error of M_alpha (delta method).
-        Verified: N=7 frustrated ring after anneal, M2 exact 3.151 vs 3.148(32);
-        filtered 3.344 vs 3.341.
+        Returns dict(m_alpha, m_alpha_filtered, err), in units of log(base)
+        (default base=np.e -> nats, base=2 -> bits, same convention as
+        entanglement_entropy), err = standard error of M_alpha (delta method).
+        Verified (in bits): N=7 frustrated ring after anneal, M2 exact 3.151 vs
+        3.148(32); filtered 3.344 vs 3.341.
         """
         gamma = self.majorana_covariance(w)
         l = self.l
@@ -606,8 +625,11 @@ class NambuIsing1D:
         s_f = (mean - 2 * d ** (-alpha)) / (1 - 2 / d) ** alpha
         m_filt = np.log2(s_f) / (1 - alpha) - np.log2(d - 2)
         err = sem / (mean * abs(1 - alpha) * np.log(2))
+        scale = np.log(2.0) / np.log(base)  # bits -> units of log(base)
         return dict(
-            m_alpha=float(m_alpha), m_alpha_filtered=float(m_filt), err=float(err)
+            m_alpha=float(m_alpha * scale),
+            m_alpha_filtered=float(m_filt * scale),
+            err=float(err * scale),
         )
 
     def grape_energy_and_grad(
@@ -619,6 +641,8 @@ class NambuIsing1D:
         Backward co-state: X_N = H_ref W1_N,  X_i = U_i^dag X_{i+1}.
         dE/da_i = 2 Re tr(X_{i+1}^dag  dU_i/da  W1_i),  dU/da via Daleckii-Krein.
         Cost O(nsteps * l^3), memory nsteps * 2l * l.
+        h_driver, h_target are on the CONTROL grid; as in evolve, ALWAYS pass
+        w0 (the default is the ground state of H at the first control point).
         """
         l, nsteps = self.l, len(h_driver)
         if w0 is None:
@@ -685,7 +709,7 @@ def _even_sector(l):
     return par > 0
 
 
-def _exact_entropy(psi, l, block, base=2.0):
+def _exact_entropy(psi, l, block, base=np.e):
     """S of sites [start, stop) from a dense state vector (Schmidt values)."""
     start, stop = block
     keep = list(range(start, stop))
@@ -748,7 +772,7 @@ def _selftest_statics(l=6, seed=1):
     )
     res = model.sre(w, alpha=2, n_samples=4000)
     print(
-        f"M2  brute force={-np.log2(tot / 2**l):.5f}   "
+        f"M2  brute force={-np.log(tot / 2**l):.5f}   "
         f"Algorithm 1={res['m_alpha']:.5f} +- {res['err']:.5f}"
     )
 
@@ -771,13 +795,15 @@ def _selftest_dynamics():
         ht_s = _exact_ising(l, np.zeros(l), model.j_vec, model.pbc)
         nsteps = 600
         dt = tf / nsteps
-        s = np.linspace(0, 1, nsteps)
+        # linear ramp s = t/tf at the cell midpoints (midpoint rule)
+        s = (np.arange(nsteps) + 0.5) / nsteps
         hd, ht = 1 - s, s
 
         psi = np.linalg.eigh(hd_s)[1][:, 0].astype(complex)
         for i in range(nsteps):
             psi = expm(-1j * dt * (hd[i] * hd_s + ht[i] * ht_s)) @ psi
-        w, _ = model.evolve(hd, ht, dt)
+        # explicit driver ground state: hd[0], ht[0] is s(dt/2), not s = 0
+        w, _ = model.evolve(hd, ht, dt, w0=model.diagonalize(1.0, 0.0)[1])
 
         even = _even_sector(l)
         for sf in (0.3, 0.8, 1.0):
