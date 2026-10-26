@@ -283,14 +283,15 @@ def animate_probs_linear(i):
     idx = sequence_linear[i]
     T = Tlist_linear_reduced[idx]
 
-    times = data_linear[T]["times"]
+    times = data_linear[T]["times"] / T
     p0 = data_linear[T]["p0"]
     p1 = data_linear[T]["p1"]
     ax_gif.plot(times, p0, ".-", linewidth=1, markersize=4.5, label="p0")
     ax_gif.plot(times, p1, ".-", linewidth=1, markersize=4.5, label="p1")
 
     ax_gif.set_title(f"Probabilities (T = {T})")
-    ax_gif.set_xlabel(r"$t$")
+    ax_gif.set_xlim(0, 1)
+    ax_gif.set_xlabel(r"$t/T$")
     ax_gif.set_ylabel("Probabilities")
     ax_gif.legend()
     ax_gif.grid()
@@ -315,7 +316,7 @@ def animate_probs_LZR(i):
     idx = sequence_LZR[i]
     T = Tlist_LZR_reduced[idx]
 
-    times = data_LZR[T]["times"]
+    times = data_LZR[T]["times"] / T
     for j in range(nlevels):
         ax_gif.plot(
             times,
@@ -327,7 +328,8 @@ def animate_probs_LZR(i):
         )
 
     ax_gif.set_title(f"Probabilities (T = {T})")
-    ax_gif.set_xlabel(r"$t$")
+    ax_gif.set_xlim(0, 1)
+    ax_gif.set_xlabel(r"$t/T$")
     ax_gif.set_ylabel("Probabilities")
     ax_gif.legend()
     ax_gif.grid()
@@ -352,7 +354,7 @@ def animate_schedule_linear(i):
     idx = sequence_linear[i]
     T = Tlist_linear_reduced[idx]
 
-    times = data_linear[T]["times"]
+    times = data_linear[T]["times"] / T
     schedule = data_linear[T]["schedule"]
     ax_gif.plot(times, schedule, ".-", linewidth=1, markersize=4.5, label="Schedule")
     ax_gif.plot(
@@ -360,7 +362,8 @@ def animate_schedule_linear(i):
     )
 
     ax_gif.set_title(f"Schedule (T = {T})")
-    ax_gif.set_xlabel(r"$t$")
+    ax_gif.set_xlim(0, 1)
+    ax_gif.set_xlabel(r"$t/T$")
     ax_gif.set_ylabel("Schedule")
     ax_gif.legend()
     ax_gif.grid()
@@ -385,7 +388,7 @@ def animate_schedule_LZR(i):
     idx = sequence_LZR[i]
     T = Tlist_LZR_reduced[idx]
 
-    times = data_LZR[T]["times"]
+    times = data_LZR[T]["times"] / T
     schedule = data_LZR[T]["schedule"]
     ax_gif.plot(times, schedule, ".-", linewidth=1, markersize=4.5, label="Schedule")
     ax_gif.plot(
@@ -393,7 +396,8 @@ def animate_schedule_LZR(i):
     )
 
     ax_gif.set_title(f"Schedule (T = {T})")
-    ax_gif.set_xlabel(r"$t$")
+    ax_gif.set_xlim(0, 1)
+    ax_gif.set_xlabel(r"$t/T$")
     ax_gif.set_ylabel("Schedule")
     ax_gif.legend()
     ax_gif.grid()
@@ -418,7 +422,7 @@ def animate_energies_linear(i):
     idx = sequence_linear[i]
     T = Tlist_linear_reduced[idx]
 
-    times = data_linear[T]["times"]
+    times = data_linear[T]["times"] / T
     evo_energy = data_linear[T]["evo_energy"]
     e0 = data_linear[T]["e0"]
     e1 = data_linear[T]["e1"]
@@ -435,7 +439,8 @@ def animate_energies_linear(i):
         color="black",
     )
     ax_gif.set_title(f"Energy (T = {T})")
-    ax_gif.set_xlabel(r"$t$")
+    ax_gif.set_xlim(0, 1)
+    ax_gif.set_xlabel(r"$t/T$")
     ax_gif.set_ylabel("Energy")
     ax_gif.legend()
     ax_gif.grid()
@@ -460,7 +465,7 @@ def animate_energies_LZR(i):
     idx = sequence_LZR[i]
     T = Tlist_LZR_reduced[idx]
 
-    times = data_LZR[T]["times"]
+    times = data_LZR[T]["times"] / T
     evo_energy = data_LZR[T]["evo_energy"]
     for j in range(nlevels):
         ax_gif.plot(
@@ -482,7 +487,8 @@ def animate_energies_LZR(i):
         color="black",
     )
     ax_gif.set_title(f"Energy (T = {T})")
-    ax_gif.set_xlabel(r"$t$")
+    ax_gif.set_xlim(0, 1)
+    ax_gif.set_xlabel(r"$t/T$")
     ax_gif.set_ylabel("Energy")
     ax_gif.legend()
     ax_gif.grid()
@@ -507,8 +513,8 @@ def animate_entanglement(i):
     idx = sequence_LZR[i]
     T = Tlist_LZR_reduced[idx]
 
-    times_linear = data_linear[T]["time_sub"]
-    times_LZR = data_LZR[T]["time_sub"]
+    times_linear = data_linear[T]["time_sub"] / T
+    times_LZR = data_LZR[T]["time_sub"] / T
     magic_linear = data_linear[T]["entanglement"]
     magic_linear_gs = data_linear[T]["entanglement_gs_level"]
     magic_LZR = data_LZR[T]["entanglement"]
@@ -526,7 +532,8 @@ def animate_entanglement(i):
     )
     ax_gif.plot(times_LZR, magic_LZR, "-", linewidth=1.5, markersize=4.5, label="LZR")
     ax_gif.set_title(f"Entanglement (T = {T})")
-    ax_gif.set_xlabel(r"$t$")
+    ax_gif.set_xlim(0, 1)
+    ax_gif.set_xlabel(r"$t/T$")
     ax_gif.set_ylabel("Entanglement")
     ax_gif.legend()
     ax_gif.grid()
@@ -551,10 +558,10 @@ def animate_magic(i):
     idx = sequence_LZR[i]
     T = Tlist_LZR_reduced[idx]
 
-    times_linear = data_linear[T]["time_sub"]
+    times_linear = data_linear[T]["time_sub"] / T
     magic_linear = data_linear[T]["magic"]
     magic_linear_gs = data_linear[T]["magic_gs_level"]
-    times_LZR = data_LZR[T]["time_sub"]
+    times_LZR = data_LZR[T]["time_sub"] / T
     magic_LZR = data_LZR[T]["magic"]
 
     ax_gif.plot(
@@ -570,7 +577,8 @@ def animate_magic(i):
     )
     ax_gif.plot(times_LZR, magic_LZR, "-", linewidth=1.5, markersize=4.5, label="LZR")
     ax_gif.set_title(f"Magic (T = {T})")
-    ax_gif.set_xlabel(r"$t$")
+    ax_gif.set_xlim(0, 1)
+    ax_gif.set_xlabel(r"$t/T$")
     ax_gif.set_ylabel("Magic")
     ax_gif.legend()
     ax_gif.grid()

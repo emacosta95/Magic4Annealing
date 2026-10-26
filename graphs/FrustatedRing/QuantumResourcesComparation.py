@@ -484,7 +484,7 @@ def comparation_plot(graph_type):
         ax2.legend()
         fig.suptitle("Magic Integral vs T")
     elif graph_type == "probs":
-        times = data_LZR[T]["times"]
+        times = data_LZR[T]["times"] / T
         for i in range(nlevels):
             ax1.plot(
                 times,
@@ -495,12 +495,12 @@ def comparation_plot(graph_type):
                 label=f"p{i}",
             )
 
-        ax1.set_xlabel(r"$t$")
+        ax1.set_xlabel(r"$t/T$")
         ax1.set_ylabel("Probabilities")
         ax1.legend()
         ax1.grid()
 
-        times2 = data_LZR2[T2]["times"]
+        times2 = data_LZR2[T2]["times"] / T2
         for i in range(nlevels):
             ax2.plot(
                 times2,
@@ -510,10 +510,10 @@ def comparation_plot(graph_type):
                 markersize=4.5,
                 label=f"p{i}",
             )
-        ax2.set_xlabel(r"$t$")
+        ax2.set_xlabel(r"$t/T$")
         ax2.legend()
         ax2.grid()
-        fig.suptitle("Probabilities vs Time")
+        fig.suptitle("Probabilities vs Normalized Time")
         print(
             f"Final probabilities for T={T}: {[format(data_LZR[T]['p{}'.format(i)][-1], '.8f') for i in range(nlevels)]}"
         )
@@ -522,7 +522,7 @@ def comparation_plot(graph_type):
         )
     elif graph_type == "schedules":
         ax1.plot(
-            data_LZR[T]["times"],
+            data_LZR[T]["times"] / T,
             data_LZR[T]["schedule"],
             ".-",
             linewidth=1,
@@ -530,20 +530,20 @@ def comparation_plot(graph_type):
             label="Schedule",
         )
         ax1.plot(
-            data_LZR[T]["times"],
+            data_LZR[T]["times"] / T,
             1 - data_LZR[T]["schedule"],
             ".-",
             linewidth=1,
             markersize=4.5,
             label="1 - Schedule",
         )
-        ax1.set_xlabel(r"$t$")
+        ax1.set_xlabel(r"$t/T$")
         ax1.set_ylabel("Schedule")
         ax1.legend()
         ax1.grid()
 
         ax2.plot(
-            data_LZR2[T2]["times"],
+            data_LZR2[T2]["times"] / T2,
             data_LZR2[T2]["schedule"],
             ".-",
             linewidth=1,
@@ -551,19 +551,19 @@ def comparation_plot(graph_type):
             label="Schedule",
         )
         ax2.plot(
-            data_LZR2[T2]["times"],
+            data_LZR2[T2]["times"] / T2,
             1 - data_LZR2[T2]["schedule"],
             ".-",
             linewidth=1,
             markersize=4.5,
             label="1 - Schedule",
         )
-        ax2.set_xlabel(r"$t$")
+        ax2.set_xlabel(r"$t/T$")
         ax2.legend()
         ax2.grid()
-        fig.suptitle("Schedules vs Time")
+        fig.suptitle("Schedules vs Normalized Time")
     elif graph_type == "spectrum":
-        times = data_LZR[T]["times"]
+        times = data_LZR[T]["times"] / T
         for i in range(nlevels):
             ax1.plot(
                 times,
@@ -573,12 +573,12 @@ def comparation_plot(graph_type):
                 markersize=4.5,
                 label=f"E{i}",
             )
-        ax1.set_xlabel(r"$t$")
+        ax1.set_xlabel(r"$t/T$")
         ax1.set_ylabel("Energy")
         ax1.legend()
         ax1.grid()
 
-        times2 = data_LZR2[T2]["times"]
+        times2 = data_LZR2[T2]["times"] / T2
         for i in range(nlevels):
             ax2.plot(
                 times2,
@@ -588,15 +588,15 @@ def comparation_plot(graph_type):
                 markersize=4.5,
                 label=f"E{i}",
             )
-        ax2.set_xlabel(r"$t$")
+        ax2.set_xlabel(r"$t/T$")
         ax2.legend()
         ax2.grid()
-        fig.suptitle("Energy Spectrum vs Time")
+        fig.suptitle("Energy Spectrum vs Normalized Time")
     elif graph_type == "entang_evo":
-        times_linear = data_linear[T]["time_sub"]
+        times_linear = data_linear[T]["time_sub"] / T
         entanglement_linear = data_linear[T]["entanglement"]
         entanglement_linear_gs = data_linear[T]["entanglement_gs_level"]
-        times_LZR = data_LZR[T]["time_sub"]
+        times_LZR = data_LZR[T]["time_sub"] / T
         entanglement_LZR = data_LZR[T]["entanglement"]
         ax1.plot(
             times_linear,
@@ -618,14 +618,14 @@ def comparation_plot(graph_type):
             times_LZR, entanglement_LZR, ".-", linewidth=1, markersize=4.5, label="LZR"
         )
         ax1.legend()
-        ax1.set_xlabel(r"$t$")
+        ax1.set_xlabel(r"$t/T$")
         ax1.set_ylabel("Entanglement")
         ax1.grid()
 
-        times_linear2 = data_linear2[T2]["time_sub"]
+        times_linear2 = data_linear2[T2]["time_sub"] / T2
         entanglement_linear2 = data_linear2[T2]["entanglement"]
         entanglement_linear_gs2 = data_linear2[T2]["entanglement_gs_level"]
-        times_LZR2 = data_LZR2[T2]["time_sub"]
+        times_LZR2 = data_LZR2[T2]["time_sub"] / T2
         entanglement_LZR2 = data_LZR2[T2]["entanglement"]
         ax2.plot(
             times_linear2,
@@ -652,14 +652,14 @@ def comparation_plot(graph_type):
             label="LZR",
         )
         ax2.legend()
-        ax2.set_xlabel(r"$t$")
+        ax2.set_xlabel(r"$t/T$")
         ax2.grid()
-        fig.suptitle("Entanglement Evolution vs Time")
+        fig.suptitle("Entanglement Evolution vs Normalized Time")
     elif graph_type == "magic_evo":
-        times_linear = data_linear[T]["time_sub"]
+        times_linear = data_linear[T]["time_sub"] / T
         magic_linear = data_linear[T]["magic"]
         magic_linear_gs = data_linear[T]["magic_gs_level"]
-        times_LZR = data_LZR[T]["time_sub"]
+        times_LZR = data_LZR[T]["time_sub"] / T
         magic_LZR = data_LZR[T]["magic"]
         ax1.plot(
             times_linear,
@@ -679,14 +679,14 @@ def comparation_plot(graph_type):
         )
         ax1.plot(times_LZR, magic_LZR, ".-", linewidth=1, markersize=4.5, label="LZR")
         ax1.legend()
-        ax1.set_xlabel(r"$t$")
+        ax1.set_xlabel(r"$t/T$")
         ax1.set_ylabel("Magic")
         ax1.grid()
 
-        times_linear2 = data_linear2[T2]["time_sub"]
+        times_linear2 = data_linear2[T2]["time_sub"] / T2
         magic_linear2 = data_linear2[T2]["magic"]
         magic_linear_gs2 = data_linear2[T2]["magic_gs_level"]
-        times_LZR2 = data_LZR2[T2]["time_sub"]
+        times_LZR2 = data_LZR2[T2]["time_sub"] / T2
         magic_LZR2 = data_LZR2[T2]["magic"]
         ax2.plot(
             times_linear2,
@@ -706,9 +706,9 @@ def comparation_plot(graph_type):
         )
         ax2.plot(times_LZR2, magic_LZR2, ".-", linewidth=1, markersize=4.5, label="LZR")
         ax2.legend()
-        ax2.set_xlabel(r"$t$")
+        ax2.set_xlabel(r"$t/T$")
         ax2.grid()
-        fig.suptitle("Magic Evolution vs Time")
+        fig.suptitle("Magic Evolution vs Normalized Time")
 
     if graph_type in [
         "min_gap",
@@ -729,6 +729,8 @@ def comparation_plot(graph_type):
     ]:
         ax1.set_title(f"Frustrated Ring file={tag+tag_T}, N={N}, T={T}")
         ax2.set_title(f"Frustrated Ring file={tag2+tag_T2}, N={N2}, T={T2}")
+        for ax in (ax1, ax2):
+            ax.set_xlim(0, 1)
 
     plt.tight_layout()
     plt.show()
