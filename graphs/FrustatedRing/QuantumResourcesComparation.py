@@ -36,18 +36,18 @@ def load_data(archivo_salida):
 graph_type = "max_entang"  # "max_entang", "max_magic", "final_energy", "entang_int", "magic_int", "min_gap", "probs", "schedules", "spectrum", "entang_evo", "magic_evo"
 graph_type2 = "max_magic"  # "max_entang", "max_magic", "final_energy", "entang_int", "magic_int", "min_gap", "probs", "schedules", "spectrum", "entang_evo", "magic_evo"
 graph_type3 = "final_energy"  # "max_entang", "max_magic", "final_energy", "entang_int", "magic_int", "min_gap", "probs", "schedules", "spectrum", "entang_evo", "magic_evo"
-graph_type4 = ""
+graph_type4 = "schedules"
 
 nlevels = 2  # number of energy levels to plot in the spectrum
 
-T = 120
-T2 = 150
+T = 100
+T2 = 140
 
-tag = "_bounded"  # "_NoGrad", "_step_test", "_bounded", "_no_random" or ""
+tag = "_FF_bounded_ws_T0=100"  # "_NoGrad", "_step_test", "_bounded", "_no_random" or ""
 tag_T = ""  # "_more_T" or ""
 N = 7
 
-tag2 = "_FF_bounded"  # "_NoGrad", "_step_test", "_bounded", "_no_random" or ""
+tag2 = "_FF_bounded_ws_T0=100"  # "_NoGrad", "_step_test", "_bounded", "_no_random" or ""
 tag_T2 = ""
 N2 = N
 

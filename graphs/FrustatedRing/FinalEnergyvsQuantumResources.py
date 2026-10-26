@@ -4,7 +4,7 @@ import re
 import matplotlib.pyplot as plt
 import numpy as np
 
-tag = "_bounded"  # "_FF", "_bounded", "_bounded_SA" or ""
+tag = "_FF_bounded"  # "_FF", "_bounded", "_bounded_SA" or ""
 tag_T = ""  # "_more_T" or ""
 N = 7
 # "magic" or "magic_filtered" (the latter only in the FF files)
