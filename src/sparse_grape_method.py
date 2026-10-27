@@ -680,12 +680,18 @@ class SparseGRAPEModel:
         raw_durations = self.parameters[:n_seg]
         raw_splateaus = self.parameters[n_seg : n_seg + M]
 
-        durations = np.log1p(np.exp(raw_durations))
+        # same decoding as _compute_driving_and_jacobian: with bounds_opt the
+        # raw parameters already are the durations and plateau heights
+        if self.bounds_opt:
+            durations = raw_durations
+            s_plateaus = raw_splateaus
+        else:
+            durations = _softplus(raw_durations)
+            s_plateaus = _sigmoid(raw_splateaus)
         durations = durations / durations.sum() * self.tf
         t_bounds = np.concatenate(([0.0], np.cumsum(durations)))
         t_bounds[-1] = self.tf
 
-        s_plateaus = 1.0 / (1.0 + np.exp(-raw_splateaus))
         s_way = np.concatenate(([0.0], s_plateaus, [1.0]))
         return t_bounds, s_way
 
