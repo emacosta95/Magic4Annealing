@@ -623,6 +623,19 @@ class SparseGRAPEModel:
                     if k - 1 >= 0:
                         ds_dtheta[n_seg + (k - 1), mask] += dsig_S[k - 1]
 
+            # Step 5 — boundary conditions s(0) = 0, s(tf) = 1 at the end
+            # points of the grid (only the state grid contains them). With
+            # bounds_opt the first or the last ramp can have zero duration:
+            # the schedule then jumps at that end, and the masks above give
+            # the plateau value there instead of the boundary value (the one
+            # the cost uses: the energy is measured with H(s=1)). Otherwise
+            # this changes nothing: s and its Jacobian already are 0/1 and 0
+            # at the end points.
+            ends = (t == 0.0) | (t == tf)
+            s[t == 0.0] = 0.0
+            s[t == tf] = 1.0
+            ds_dtheta[:, ends] = 0.0
+
             # h_driver = 1 - s, h_target = s (no ramp envelope for LZS), so
             # their theta-Jacobians are just -ds_dtheta and +ds_dtheta.
             h_driver = 1.0 - s
