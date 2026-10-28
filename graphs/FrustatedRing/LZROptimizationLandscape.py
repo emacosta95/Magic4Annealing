@@ -1,3 +1,10 @@
+"""
+General landscape: energy, max magic and max entanglement (one evolution
+per point) on the plane through 3 of the optima of
+ParametersLZR_T={T}_N={N}.npz (build/FrustatedRing/parameter_generation_LZR.py).
+T, N and the 3 seeds are set at the top.
+"""
+
 import numpy as np
 
 from src.landscape_utils import (

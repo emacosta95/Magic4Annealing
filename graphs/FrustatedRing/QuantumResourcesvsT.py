@@ -1,3 +1,11 @@
+"""
+LZR vs linear schedule as a function of T: minimum gap, max/integrated
+entanglement and magic, final energy error; gifs over T of probabilities,
+schedule, energies, entanglement and magic.
+Input: merged QuantumResourcesvsT_N={N}_LZR{tag}.npz and _linear.npz
+(build/FrustatedRing/run_LZR* or run_linear + merge_*). Set tag, tag_T, N at the top.
+"""
+
 import os
 import re
 

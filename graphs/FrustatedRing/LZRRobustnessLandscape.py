@@ -1,3 +1,18 @@
+"""
+Landscape of the fidelity robustness against the global fields
+V_a = lambda sum_i sigma^a_i (a = x, y, z, spin-basis axes: x is the driver
+axis, z the target one), one figure per axis, on the plane through 3 of the
+10 optima of ParametersLZR_T={T}_N={N}.npz
+(build/FrustatedRing/parameter_generation_LZR.py).
+Usage: T N COMBO, COMBO = index into combinations(range(10), 3).
+
+Plotted: G_aa of src/fidelity_robustness.py, i.e. the variance
+Var(int_0^T V_a(t) dt) in the Heisenberg picture, with
+1 - F ~ lambda^2 G_aa, F the fidelity with the unperturbed final state.
+Spin basis, full 2^N space (sigma^y and sigma^z leave the Z2 +1 sector and
+are not Gaussian in free fermions).
+"""
+
 import os
 import sys
 from itertools import combinations
@@ -13,14 +28,6 @@ from src.landscape_utils import (
 )
 from src.parallel import available_cpus
 from src.sparse_grape_method import lzs_bounds
-
-# Landscape of the fidelity robustness against the global fields
-# V_a = lambda sum_i sigma^a_i (a = x, y, z, spin-basis axes: x is the driver
-# axis, z the target one): G_aa of src/fidelity_robustness.py, i.e. the
-# variance Var(int_0^T V_a(t) dt) in the Heisenberg picture, with
-# 1 - F ~ lambda^2 G_aa, F the fidelity with the unperturbed final state.
-# Spin basis, full 2^N space (sigma^y and sigma^z leave the Z2 +1 sector and
-# are not Gaussian in free fermions). One figure per axis.
 
 T = int(sys.argv[1])
 

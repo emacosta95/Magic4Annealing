@@ -1,3 +1,11 @@
+"""
+Evolution with T of the landscape around 3 fixed vectors: the plane is the
+one through 3 optima found at T, and energy, max magic and max entanglement
+are evaluated on it at Ti = T + 10 (k - 2), k = 0..4 (one job per k).
+Usage: T N SEED1 SEED2 SEED3 k. Input: ParametersLZR_T={T}_N={N}.npz
+(build/FrustatedRing/parameter_generation_LZR.py).
+"""
+
 import os
 import sys
 

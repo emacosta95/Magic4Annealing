@@ -1,3 +1,10 @@
+"""
+Fidelity of the LZR and linear schedules at one T under the global fields
+lambda sum_i sigma^a_i (a = x, y, z), exact or second order. Computed here
+(spin basis, full 2^N) from the schedule of the merged
+QuantumResourcesvsT_N={N}_LZR{tag}.npz. Set tag, N, T, method at the top.
+"""
+
 import os
 
 import matplotlib.pyplot as plt

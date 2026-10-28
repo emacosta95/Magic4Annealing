@@ -1,3 +1,10 @@
+"""
+Side-by-side comparison of two LZR files (tag/T vs tag2/T2), each with its
+linear reference. Plots chosen with graph_type..graph_type4 (max_entang,
+max_magic, final_energy, schedules, spectrum, magic_evo, ...).
+Input: merged QuantumResourcesvsT files (build/FrustatedRing/merge_LZR.py, merge_linear.py).
+"""
+
 import re
 
 import matplotlib.pyplot as plt

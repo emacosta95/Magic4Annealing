@@ -1,3 +1,10 @@
+"""
+Energy, max magic and max entanglement along the line between the optimum
+of two LZR files at the same T (e.g. _bounded_SA vs _bounded).
+Spin basis, old function API of src/landscape_utils.py. Input: merged
+QuantumResourcesvsT files (build/FrustatedRing/merge_LZR.py). Set tag, tag2, T at the top.
+"""
+
 import os
 import re
 

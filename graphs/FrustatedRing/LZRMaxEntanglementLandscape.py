@@ -1,3 +1,10 @@
+"""
+Max-entanglement landscape on the plane through 3 of the 10 optima of
+ParametersLZR_T={T}_N={N}.npz (build/FrustatedRing/parameter_generation_LZR.py).
+Usage: T N COMBO, COMBO = index into combinations(range(10), 3).
+Free fermions, parallel over the points of the plane.
+"""
+
 import os
 import sys
 from itertools import combinations

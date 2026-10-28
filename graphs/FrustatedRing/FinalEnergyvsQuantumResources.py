@@ -1,3 +1,10 @@
+"""
+Final energy error vs resources over T (one point per T): scatter against
+max magic, max entanglement, plateau heights and max p1; passes through s*
+(CrossingPasses) and the (s_1, s_2) plateau map (PlateauMap).
+Input: merged QuantumResourcesvsT_N={N}_LZR{tag}.npz. Set tag, N at the top.
+"""
+
 import os
 import re
 

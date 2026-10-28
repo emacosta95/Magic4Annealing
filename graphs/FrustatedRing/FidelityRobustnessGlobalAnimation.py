@@ -1,3 +1,9 @@
+"""
+mp4 over T of the plot of FidelityRobustnessGlobal.py, from precomputed data:
+FidelityRobustnessvsT_N={N}_LZR{tag}.npz
+(build/FrustatedRing/run_fidelity_robustness.py + merge_fidelity_robustness.py).
+"""
+
 import os
 import re
 import shutil
