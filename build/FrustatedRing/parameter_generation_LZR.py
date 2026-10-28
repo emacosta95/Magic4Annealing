@@ -1,3 +1,5 @@
+"""Optima of 10 seeds (spin basis, bounded) for the landscape scripts. See README.md."""
+
 import sys
 import time
 

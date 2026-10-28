@@ -1,3 +1,5 @@
+"""Merge the per-T outputs of run_linear_more_T.py. See README.md."""
+
 import glob
 import os
 import re

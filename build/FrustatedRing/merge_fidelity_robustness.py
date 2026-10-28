@@ -1,3 +1,5 @@
+"""Merge the per-T outputs of run_fidelity_robustness.py. See README.md."""
+
 import glob
 import os
 import re

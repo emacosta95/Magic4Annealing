@@ -1,3 +1,5 @@
+"""OBSOLETE test: magic of the lifted 2^N state instead of the sector state. See README.md."""
+
 import sys
 import time
 

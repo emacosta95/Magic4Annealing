@@ -1,3 +1,5 @@
+"""Linear schedule s = t/T, free fermions. See README.md."""
+
 import sys
 import time
 

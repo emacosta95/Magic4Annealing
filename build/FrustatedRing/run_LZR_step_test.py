@@ -1,3 +1,5 @@
+"""OBSOLETE test: LZR, spin basis, GRAPE, single run from seed 6. See README.md."""
+
 import sys
 import time
 

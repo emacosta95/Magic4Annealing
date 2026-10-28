@@ -1,3 +1,5 @@
+"""Linear schedule s = t/T, free fermions (same as run_linear.py, output _linear_more_T). See README.md."""
+
 import sys
 import time
 

@@ -1,3 +1,5 @@
+"""LZR, spin basis, simulated annealing, unbounded, best of 5. See README.md."""
+
 import sys
 import time
 

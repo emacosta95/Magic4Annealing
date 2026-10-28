@@ -1,3 +1,5 @@
+"""LZR, spin basis, GRAPE, unbounded, best of 50. See README.md."""
+
 import sys
 import time
 

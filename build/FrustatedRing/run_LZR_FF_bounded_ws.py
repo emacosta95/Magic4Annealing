@@ -1,3 +1,5 @@
+"""LZR, free fermions, bounded, warm start along T from the best of 200 at T0. See README.md."""
+
 import sys
 import time
 from functools import partial

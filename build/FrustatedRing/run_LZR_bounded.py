@@ -1,3 +1,5 @@
+"""LZR, spin basis, GRAPE, bounded, best of 50, 100 steps per unit T. See README.md."""
+
 import sys
 import time
 

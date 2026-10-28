@@ -1,3 +1,5 @@
+"""Merge the per-T outputs of the run_LZR* scripts. See README.md."""
+
 import glob
 import os
 import re

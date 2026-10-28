@@ -1,3 +1,5 @@
+"""LZR, spin basis, gradient-free (COBYLA), single run from seed 6. See README.md."""
+
 import sys
 import time
 

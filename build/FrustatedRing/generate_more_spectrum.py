@@ -1,3 +1,5 @@
+"""Recompute the spectrum of a merged LZR file with more levels (overwrites it). See README.md."""
+
 import re
 import sys
 import time

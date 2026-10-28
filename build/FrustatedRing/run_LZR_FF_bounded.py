@@ -1,3 +1,5 @@
+"""LZR, free fermions, GRAPE, bounded, best of 200. See README.md."""
+
 import sys
 import time
 

@@ -1,3 +1,5 @@
+"""LZR, free fermions, bounded, warm start along T from a single seed at T0. See README.md."""
+
 import sys
 import time
 

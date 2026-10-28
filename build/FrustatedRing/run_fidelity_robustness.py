@@ -1,3 +1,5 @@
+"""Fidelity robustness (global fields, full 2^N) of a merged LZR file and the linear schedule. See README.md."""
+
 import sys
 import time
 

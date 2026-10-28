@@ -1,3 +1,5 @@
+"""LZR, free fermions, bounded, one run per seed at fixed T (seed scan). See README.md."""
+
 import sys
 import time
 

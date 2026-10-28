@@ -1,3 +1,5 @@
+"""LZR, spin basis, GRAPE, single run from the deterministic initial point. See README.md."""
+
 import sys
 import time
 

@@ -1,3 +1,5 @@
+"""OBSOLETE test: one SA run at T=80, N=7 (not bounded despite the name). See README.md."""
+
 import time
 
 import numpy as np

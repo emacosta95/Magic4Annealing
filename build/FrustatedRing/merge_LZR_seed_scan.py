@@ -1,3 +1,5 @@
+"""Merge the per-seed outputs of run_LZR_seed_scan_FF_bounded.py. See README.md."""
+
 import glob
 import os
 import re
