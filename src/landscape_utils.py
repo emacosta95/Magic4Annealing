@@ -1134,10 +1134,11 @@ class RingLandscape:
         return self._final_energy(w1, s_state[-1]), max_magic, max_entanglement
 
     def robustness(self, theta):
-        """(G_xx, G_yy, G_zz): diagonal of the robustness matrix G of
-        src/fidelity_robustness.py for the global fields lambda sum_i
-        sigma^a_i (spin-basis axes, full space): 1 - F ~ lambda^2 G_aa, F the
-        fidelity with the unperturbed final state."""
+        """(G_{S^x S^x}, G_{S^y S^y}, G_{S^z S^z}): diagonal of the robustness
+        matrix G of src/fidelity_robustness.py for the global fields
+        lambda S^a, S^a = sum_i sigma^a_i (spin-basis axes, full space):
+        1 - F ~ lambda^2 G_{S^a S^a}, F the fidelity with the unperturbed final
+        state. Equal to sum_{i,j} G_{(a,i),(a,j)} of the local fields."""
         s_ctrl, _ = self.schedule(theta)
         robustness = FidelityRobustness(
             self.N,

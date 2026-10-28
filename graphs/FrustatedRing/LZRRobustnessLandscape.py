@@ -1,14 +1,16 @@
 """
 Landscape of the fidelity robustness against the global fields
-V_a = lambda sum_i sigma^a_i (a = x, y, z, spin-basis axes: x is the driver
-axis, z the target one), one figure per axis, on the plane through 3 of the
-10 optima of ParametersLZR_T={T}_N={N}.npz
+V = lambda S^a, S^a = sum_i sigma^a_i (a = x, y, z, spin-basis axes: x is the
+driver axis, z the target one), one figure per axis, on the plane through 3
+of the 10 optima of ParametersLZR_T={T}_N={N}.npz
 (build/FrustatedRing/parameter_generation_LZR.py).
 Usage: T N COMBO, COMBO = index into combinations(range(10), 3).
 
-Plotted: G_aa of src/fidelity_robustness.py, i.e. the variance
-Var(int_0^T V_a(t) dt) in the Heisenberg picture, with
-1 - F ~ lambda^2 G_aa, F the fidelity with the unperturbed final state.
+Plotted: G_{S^a S^a} of src/fidelity_robustness.py, i.e. the variance
+Var(int_0^T S^a(t) dt) in the Heisenberg picture, with
+1 - F ~ lambda^2 G_{S^a S^a}, F the fidelity with the unperturbed final state.
+Not the single-qubit G_{(a,i),(a,i)}: G_{S^a S^a} = sum_{i,j} G_{(a,i),(a,j)},
+cross terms between sites included.
 Spin basis, full 2^N space (sigma^y and sigma^z leave the Z2 +1 sector and
 are not Gaussian in free fermions).
 """
@@ -47,7 +49,7 @@ resolution = 50
 # processes the points of the plane are spread over (all the cores of the job)
 n_workers = available_cpus()
 
-# theta -> (G_xx, G_yy, G_zz) (src/landscape_utils.py)
+# theta -> (G_{S^x S^x}, G_{S^y S^y}, G_{S^z S^z}) (src/landscape_utils.py)
 landscape = RingLandscape(
     N,
     T,
@@ -76,7 +78,7 @@ if __name__ == "__main__":
     theta2 = data["theta_list"][chosen_seeds[1]]
     theta3 = data["theta_list"][chosen_seeds[2]]
 
-    # G[..., a] = G_aa, the three axes from the same augmented evolution
+    # G[..., a] = G_{S^a S^a}, the three axes from the same augmented evolution
     A, B, G, coords = scan_plane(
         theta1,
         theta2,
@@ -101,16 +103,16 @@ if __name__ == "__main__":
         if not os.path.exists(path):
             os.makedirs(path)
 
-        # G_aa spans orders of magnitude over the plane: log color scale
-        # (1 - F ~ lambda^2 G_aa, see the top of the file)
+        # G_{S^a S^a} spans orders of magnitude over the plane: log color
+        # scale (1 - F ~ lambda^2 G_{S^a S^a}, see the top of the file)
         plot_landscape(
             A,
             B,
             G[..., a],
             coords,
             energies,
-            label=rf"$G_{{{axis}{axis}}}$",
-            title=rf"Robustness landscape, $V = \lambda\, \Sigma_i\, \sigma^{axis}_i$, T={T} N={N}",
+            label=rf"$G_{{S^{axis} S^{axis}}}$",
+            title=rf"Robustness landscape, $V = \lambda S^{axis}$, $S^{axis} = \Sigma_i\, \sigma^{axis}_i$, T={T} N={N}",
             save_path=f"{path}/{chosen_seeds[0]}_{chosen_seeds[1]}_{chosen_seeds[2]}.png",
             region=region,
             log=True,
