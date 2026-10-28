@@ -1,3 +1,14 @@
+"""
+JAX backend, the project's first implementation.
+
+  - JaxSchedule / JaxSchedulerModel / JaxTrainer: schedule ansätze + dense
+    expm evolution + jax.grad. Superseded by SparseGRAPEModel and
+    NambuGRAPEModel; only lzs_tau_scan.py and old_routines/ still use them.
+  - SREJax: stabilizer Rényi entropy M_2 of a state vector, batched over
+    the 4^n Paulis. STILL IN USE: spin-basis magic in run_LZR* and in
+    RingLandscape (N <= 9).
+"""
+
 import numpy as np
 import scipy
 from scipy.optimize import minimize
@@ -767,7 +778,7 @@ class SREJax:
         }
 
     def characteristic_function_per_weight(self, psi: np.ndarray, k: int) -> dict:
-        """
+        r"""
         Xi(P)^2 / \sum_P Xi(P)^2 for each weight-k Pauli — same normalization as the full
         Pauli spectrum (weight_distribution sums this over all P in a bin;
         this returns the un-summed per-Pauli values for wt(P) = k).

@@ -1,3 +1,17 @@
+"""
+Spin-basis building blocks (full 2^N space, sparse scipy matrices).
+
+  - Hamiltonians: get_longitudinal_hamiltonian (target, from jij/hz),
+    get_driver_hamiltonian, catalyst and first-order counterdiabatic terms.
+  - AGP: compute_exact_AGP (from eigenstates), its Pauli decomposition and
+    operator size distribution (pauli_decompose, agp_osd, ...),
+    build_agp_unitary, operator_spreading_agp. Only used in the notebooks.
+  - computational_basis.
+
+Used by the spin-basis build scripts (run_LZR*, run_fidelity_robustness),
+landscape_utils and fidelity_robustness.
+"""
+
 from __future__ import annotations
 
 from itertools import product

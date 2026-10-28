@@ -1,3 +1,12 @@
+"""
+State utilities in the spin basis.
+
+  - EntanglementEntropy: von Neumann / Rényi entropy of a bipartition
+    (Schmidt values), also along a trajectory.
+  - Z2SymmetricSector: projection onto / lift from the ±1 sector of
+    Pi = prod_i X_i (the annealing from |+>^N stays in the +1 sector).
+"""
+
 import numpy as np
 import scipy.sparse as sp
 

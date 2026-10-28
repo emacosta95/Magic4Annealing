@@ -1,4 +1,12 @@
-# ── scan_2d + plot_scan (only needed once — skip if already defined) ──
+"""
+Helpers for the notebooks (FrustratedRing.ipynb,
+LandscapeScan_FrustratedRing.ipynb); no script uses them.
+
+  - scan_2d / plot_scan: energy, magic and entanglement on a 2D grid of
+    parameters around a point.
+  - propagate_trajectory: time-resolved states for one theta.
+"""
+
 import matplotlib.pyplot as plt
 import numpy as np
 from tqdm import trange

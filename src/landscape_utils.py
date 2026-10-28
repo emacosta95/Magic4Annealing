@@ -1,3 +1,17 @@
+"""
+Landscapes of the LZR schedule of the frustrated ring: observables as a
+function of theta on a plane through 3 points (or a line through 2) of
+parameter space. Backend of graphs/FrustatedRing/LZR*Landscape.py.
+
+  - RingLandscape: theta -> final energy, max entanglement, max magic,
+    robustness (free fermions; spin basis only where needed).
+  - Geometry/scan: build_plane_basis, plane_grid, scan_plane (parallel),
+    bounds_region (part of the plane inside the optimization bounds).
+  - Plots: plot_landscape and the plot_*_landscape(_1d) wrappers.
+  - Older spin-basis function API (energy_fn, max_magic_fn, ...): only
+    used by InterpolationGRAPEvsSA.py.
+"""
+
 import zlib
 
 import matplotlib.patheffects as path_effects

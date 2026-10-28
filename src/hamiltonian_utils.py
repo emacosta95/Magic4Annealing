@@ -1,3 +1,8 @@
+"""
+Couplings (jij, hz) of the frustrated Ising ring for
+annealing_utils.get_longitudinal_hamiltonian (spin basis).
+"""
+
 import numpy as np
 
 
