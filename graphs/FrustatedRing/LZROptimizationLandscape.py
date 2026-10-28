@@ -1,280 +1,123 @@
 import numpy as np
 
-from src.annealing_utils import (
-    get_driver_hamiltonian,
-    get_longitudinal_hamiltonian,
-)
-from src.hamiltonian_utils import frustrated_ring_jij_hz
-from src.jax_utils import SREJax
 from src.landscape_utils import (
-    energy_fn,
-    energy_landscape,
-    max_entanglement_fn,
-    max_entanglement_landscape,
-    max_magic_fn,
-    max_magic_landscape,
+    RingLandscape,
+    bounds_region,
     plot_energy_landscape,
     plot_max_entanglement_landscape,
     plot_max_magic_landscape,
+    scan_plane,
 )
-from src.time_grid import make_time_grids
-from src.utils import EntanglementEntropy, Z2SymmetricSector
-
-
-def build_schedule(theta, t):
-    # Direct s(t) parametrization: h_driver=1-s, h_target=s, so BOTH
-    # depend on the FULL parameter vector — unlike the branches
-    # above, where driver/target params are disjoint. Durations are
-    # jointly softplus-normalized to sum to tf, so a change in any
-    # single raw_duration_m shifts EVERY segment boundary, not just
-    # its own segment — this couples all n_seg duration params
-    # together in the Jacobian (see dTb below).
-    tf = times[-1]
-    parameters = theta
-    M = 2  # number of plateaus/arms
-    n_seg = 5
-    raw_durations = parameters[:n_seg]
-    raw_splateaus = parameters[n_seg : n_seg + M]
-
-    # # Step 1 — decode segment durations.
-    # # softplus(raw_durations) > 0 guarantees positive durations;
-    # # dividing by their sum and multiplying by tf renormalizes them
-    # # to add up to exactly the total annealing time.
-    # # ── softplus and its derivative ───────────────────────────────────────────────
-    # def _softplus(x: np.ndarray) -> np.ndarray:
-    #     """
-    #     log(1 + exp(x)), numerically stable.
-
-    #     Used to map an unconstrained real parameter onto a strictly-positive
-    #     number (e.g. a segment duration, which must be > 0). Computed as
-    #     log1p(exp(-|x|)) + max(x, 0) instead of the naive log(1+exp(x)) to
-    #     avoid overflow for large x.
-    #     """
-    #     return np.log1p(np.exp(-np.abs(x))) + np.maximum(x, 0)
-
-    # def _sigmoid(x: np.ndarray) -> np.ndarray:
-    #     """
-    #     Derivative of softplus = sigmoid(x) = 1 / (1 + exp(-x)).
-
-    #     Two independent uses in this file:
-    #     1. As d(softplus)/dx, needed by the chain rule wherever a
-    #         softplus-mapped parameter (e.g. a raw duration) is differentiated.
-    #     2. As a standalone squashing function 0->1, used to map the raw
-    #         LZS plateau-height parameters into the physical range s in [0, 1].
-    #     """
-    #     return 1.0 / (1.0 + np.exp(-x))
-
-    D = raw_durations
-    Ssum = D.sum()
-    scaled_durations = D / Ssum * tf
-    t_bounds = np.concatenate(([0.0], np.cumsum(scaled_durations)))
-    t_bounds[-1] = tf  # guard against fp drift
-
-    # Step 3 — decode plateau heights via sigmoid into (0,1), and
-    # assemble the full waypoint list s_way = [0, plateau_1, ...,
-    # plateau_M, 1] (M+2 entries: the boundary values 0 and 1 are
-    # NOT free parameters).
-    sig_S = raw_splateaus
-    s_way = np.concatenate(([0.0], sig_S, [1.0]))  # (M+2,)
-
-    # Step 4 — walk through the 2M+1 alternating ramp/plateau
-    # segments, filling in s(t) and its Jacobian ds_dtheta segment
-    # by segment. ds_dtheta packs BOTH parameter blocks into one
-    # (n_params, nsteps) array: rows [0:n_seg] are duration
-    # sensitivities, rows [n_seg:n_seg+M] are plateau-height
-    # sensitivities.
-    s = np.zeros_like(t)
-
-    for seg in range(n_seg):
-        t0, t1 = t_bounds[seg], t_bounds[seg + 1]
-        mask = (t >= t0) & (t <= t1)  # heaviside condition
-        tm = t[mask]
-        denom = (t1 - t0) if t1 > t0 else 1.0
-
-        if seg % 2 == 0:
-            # Ramp segment (even index): linear interpolation
-            # between waypoint k and k+1, k = seg // 2.
-            k = seg // 2
-            s0, s1_ = s_way[k], s_way[k + 1]
-            frac = (tm - t0) / denom
-            s[mask] = s0 + (s1_ - s0) * frac
-
-        else:
-            # Plateau segment (odd index): s is held constant at
-            # s_way[k], k = (seg+1)//2, for the whole segment — so
-            # there is no time-dependence and hence NO duration
-            # sensitivity (a plateau's height doesn't change if you
-            # stretch or shrink how long it lasts).
-            k = (seg + 1) // 2
-            s[mask] = s_way[k]
-
-    # h_driver = 1 - s, h_target = s (no ramp envelope for LZS), so
-    # their theta-Jacobians are just -ds_dtheta and +ds_dtheta.
-    h_driver = 1.0 - s
-    h_target = s
-
-    return h_driver, h_target
-
-
-# theta1, theta2, theta3 = your three parameter vectors (1D arrays of the same size)
-# build_schedule = your function mapping theta -> schedule
-# times, times_ctrl, delta_t, psi0, driver_hamiltonian_s, target_hamiltonian_s = your simulation setup
-
-
-def energy_fn_wrapper(theta):
-    return energy_fn(
-        theta,
-        build_schedule,
-        times,
-        times_ctrl,
-        delta_t,
-        psi_init_s,
-        driver_hamiltonian_s,
-        target_hamiltonian_s,
-    )
-
-
-def max_magic_fn_wrapper(theta):
-    return max_magic_fn(
-        theta,
-        build_schedule,
-        times,
-        times_ctrl,
-        delta_t,
-        psi_init_s,
-        sre,
-        driver_hamiltonian_s,
-        target_hamiltonian_s,
-    )
-
-
-def max_entanglement_fn_wrapper(theta):
-    return max_entanglement_fn(
-        theta,
-        build_schedule,
-        times,
-        times_ctrl,
-        delta_t,
-        psi_init_s,
-        sector,
-        entanglement_entropy,
-        driver_hamiltonian_s,
-        target_hamiltonian_s,
-    )
-
+from src.sparse_grape_method import lzs_bounds
 
 T = 120
 
-N = 7  # odd; N=9,11,13 feasible for full 2^N exact diagonalization
+N = 7  # odd; magic in the spin basis for N <= 9, free fermions above
 J, JL, JR = 1.0, 0.5, 0.45
 
-jij, hz = frustrated_ring_jij_hz(N, J, JL, JR)
-
-nqubits = N
-target_hamiltonian = get_longitudinal_hamiltonian(
-    jij, hz
-)  # sparse scipy matrix, full 2^N space
-driver_hamiltonian = get_driver_hamiltonian(
-    nqubits=nqubits
-)  # sparse scipy matrix, full 2^N space
-
-
-# The uniform superposition (driver ground state) is manifestly +1 under the
-# global flip Pi = prod_i X_i, so annealing dynamics from this initial state
-# stays confined to the +1 sector for all s in [0,1] (H(s) commutes with Pi
-# throughout, since target has only ZZ terms and driver only X terms).
-sector = Z2SymmetricSector(nqubits, sign=+1)
-
-dim = 2**nqubits
-psi_init_full = np.ones(dim, dtype=complex) / np.sqrt(dim)
-assert sector.check_confined(
-    psi_init_full
-), "initial state is not confined to the +1 sector!"
-
-target_hamiltonian_s = sector.project(
-    target_hamiltonian
-)  # sparse, dim_sector x dim_sector
-driver_hamiltonian_s = sector.project(driver_hamiltonian)
-psi_init_s = sector.project(psi_init_full)
-
 # ── time evolution parameters ─────────────────────────────────────────────────
-nlevels = 2
-tau = T  # try a range of tau; the ring is expected to need LARGE tau
-# for a linear ramp to reach the ground state (exponential
-# slowdown at the AC) -- this is exactly the motivation for
-# optimal control / LZS below.
-time_steps = int(10 * tau)  # number of propagation steps
-# midpoint rule (src/time_grid.py): states on `times` (time_steps + 1 points,
-# 0..tau); the schedule driving each step is evaluated at `times_ctrl`
-times, times_ctrl, delta_t = make_time_grids(tau, time_steps)
+# propagation steps per unit of time, as in the optimization of the
+# parameters (build/FrustatedRing/parameter_generation_LZR.py)
+steps_per_unit = 100
+# time between the states the maximum magic is taken over
+magic_dt = 0.1
+n_samples = 1000  # Majorana samples per SRE estimate (free fermions, N > 9)
 
 # ── optimization parameters ───────────────────────────────────────────────────
 number_parameters = 2  # M=2 plateaus/arms -> n_params = 3*M+1 = 7, matching
 # Werner et al.'s reduction from Cote et al.'s ~100-parameter
 # variational schedule down to 7 parameters
-type = "LZS"
 resolution = 25
+# processes the points of the plane are spread over. 1: the magic uses JAX,
+# ~300 MB and ~1.5 cores per process; several of them filled the memory of a
+# laptop. Raise it on the cluster to finish one landscape sooner
+n_workers = 1
 
-
-filename = f"../../generated/FrustatedRing/ParametersLZR_T={T}_N={N}.npz"
-data = np.load(filename)
-chosen_seeds = [7, 8, 9]
-
-theta1 = data["theta_list"][chosen_seeds[0]]
-theta2 = data["theta_list"][chosen_seeds[1]]
-theta3 = data["theta_list"][chosen_seeds[2]]
-
-sre = SREJax(n_qubits=nqubits - 1, batch_size=1000)
-entanglement_entropy = EntanglementEntropy(nqubits=nqubits, n_A=nqubits // 2)
-
-A, B, E, coords = energy_landscape(
-    theta1, theta2, theta3, energy_fn_wrapper, resolution=resolution
+# theta -> (final energy, maximum magic, maximum entanglement)
+# (src/landscape_utils.py)
+landscape = RingLandscape(
+    N,
+    T,
+    steps_per_unit=steps_per_unit,
+    number_parameters=number_parameters,
+    J=J,
+    JL=JL,
+    JR=JR,
+    magic_dt=magic_dt,
+    n_samples=n_samples,
+    magic=True,
 )
 
-A, B, max_magic, coords = max_magic_landscape(
-    theta1, theta2, theta3, max_magic_fn_wrapper, resolution=resolution
-)
 
-A, B, max_entanglement, coords = max_entanglement_landscape(
-    theta1, theta2, theta3, max_entanglement_fn_wrapper, resolution=resolution
-)
+def observables(theta):
+    # module level: the worker processes of the scan call it. They import
+    # this file again (everything above), not what follows the guard
+    return landscape.observables(theta)
 
-filename_img_energy = f"../../images/FrustatedRing/FinalEnergyLandscapeLZR_T={T}_N={N}_{chosen_seeds[0]}_{chosen_seeds[1]}_{chosen_seeds[2]}.png"
-filename_img_max_entanglement = f"../../images/FrustatedRing/MaxEntanglementLZR_T={T}_N={N}_{chosen_seeds[0]}_{chosen_seeds[1]}_{chosen_seeds[2]}.png"
-filename_img_max_magic = f"../../images/FrustatedRing/MaxMagicLZR_T={T}_N={N}_{chosen_seeds[0]}_{chosen_seeds[1]}_{chosen_seeds[2]}.png"
 
-energies = {
-    "theta1": energy_fn_wrapper(theta1),
-    "theta2": energy_fn_wrapper(theta2),
-    "theta3": energy_fn_wrapper(theta3),
-}
+if __name__ == "__main__":
+    filename = f"../../generated/FrustatedRing/ParametersLZR_T={T}_N={N}.npz"
+    data = np.load(filename)
+    chosen_seeds = [7, 8, 9]
 
-plot_energy_landscape(
-    A,
-    B,
-    E,
-    coords,
-    energies,
-    title=f"Energy landscape T={T} N={N}",
-    save_path=filename_img_energy,
-)
+    theta1 = data["theta_list"][chosen_seeds[0]]
+    theta2 = data["theta_list"][chosen_seeds[1]]
+    theta3 = data["theta_list"][chosen_seeds[2]]
 
-plot_max_magic_landscape(
-    A,
-    B,
-    max_magic,
-    coords,
-    energies,
-    title=f"Max magic landscape T={T} N={N}",
-    save_path=filename_img_max_magic,
-)
+    # the three observables of every point from the same evolution
+    A, B, values, coords = scan_plane(
+        theta1,
+        theta2,
+        theta3,
+        observables,
+        resolution=resolution,
+        n_workers=n_workers,
+    )
+    E, max_magic, max_entanglement = values[..., 0], values[..., 1], values[..., 2]
+    # part of the plane within the bounds of the optimization (bounds_opt)
+    region = bounds_region(
+        theta1, theta2, theta3, A, B, lzs_bounds(number_parameters)
+    )
 
-plot_max_entanglement_landscape(
-    A,
-    B,
-    max_entanglement,
-    coords,
-    energies,
-    title=f"Max entanglement landscape T={T} N={N}",
-    save_path=filename_img_max_entanglement,
-)
+    filename_img_energy = f"../../images/FrustatedRing/FinalEnergyLandscapeLZR_T={T}_N={N}_{chosen_seeds[0]}_{chosen_seeds[1]}_{chosen_seeds[2]}.png"
+    filename_img_max_entanglement = f"../../images/FrustatedRing/MaxEntanglementLZR_T={T}_N={N}_{chosen_seeds[0]}_{chosen_seeds[1]}_{chosen_seeds[2]}.png"
+    filename_img_max_magic = f"../../images/FrustatedRing/MaxMagicLZR_T={T}_N={N}_{chosen_seeds[0]}_{chosen_seeds[1]}_{chosen_seeds[2]}.png"
+
+    energies = {
+        "theta1": landscape.energy(theta1),
+        "theta2": landscape.energy(theta2),
+        "theta3": landscape.energy(theta3),
+    }
+
+    plot_energy_landscape(
+        A,
+        B,
+        E,
+        coords,
+        energies,
+        title=f"Energy landscape T={T} N={N}",
+        save_path=filename_img_energy,
+        region=region,
+    )
+
+    plot_max_magic_landscape(
+        A,
+        B,
+        max_magic,
+        coords,
+        energies,
+        title=f"Max magic landscape T={T} N={N}",
+        save_path=filename_img_max_magic,
+        region=region,
+    )
+
+    plot_max_entanglement_landscape(
+        A,
+        B,
+        max_entanglement,
+        coords,
+        energies,
+        title=f"Max entanglement landscape T={T} N={N}",
+        save_path=filename_img_max_entanglement,
+        region=region,
+    )

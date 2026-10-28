@@ -139,6 +139,17 @@ def _sigmoid(x: np.ndarray) -> np.ndarray:
 _SOFTPLUS_1 = _softplus(np.ones(1))[0]  # softplus(1) ≈ 1.3133
 
 
+def lzs_bounds(number_of_parameters: int) -> list:
+    """
+    Box bounds of the LZS parameters with bounds_opt=True, as used by
+    SparseGRAPETrainer: the 2M+1 raw durations >= 0 and the M plateau
+    heights in [0, 1] (M = number_of_parameters). One [low, high] per
+    parameter, in the order of the parameter vector.
+    """
+    n_seg = 2 * number_of_parameters + 1
+    return [[0, float("+inf")]] * n_seg + [[0, 1]] * number_of_parameters
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 class SparseGRAPEModel:
     """
@@ -947,10 +958,7 @@ class SparseGRAPETrainer:
         # dependent on the self.model.bounds_opt. This condition makes sense
         # only for the LSZ ansatz though.
         if self.model.bounds_opt:
-            dim = self.model.number_parameters
-            M = dim
-            n_seg = 2 * dim + 1
-            bounds = [[0, float("+inf")]] * n_seg + [[0, 1]] * M
+            bounds = lzs_bounds(self.model.number_parameters)
             res = minimize(
                 self.model.forward_and_gradient,
                 self.model.parameters,
