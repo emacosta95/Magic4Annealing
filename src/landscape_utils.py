@@ -3,11 +3,14 @@ import zlib
 import matplotlib.patheffects as path_effects
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.colors import LogNorm
 from matplotlib.patches import PathPatch
 from matplotlib.path import Path
+from matplotlib.ticker import LogFormatterSciNotation, LogLocator
 from mpl_toolkits.axes_grid1 import make_axes_locatable
 
 from src.annealing_utils import get_driver_hamiltonian, get_longitudinal_hamiltonian
+from src.fidelity_robustness import FidelityRobustness, global_pauli_operators
 from src.free_fermions_grape_method import NambuGRAPEModel
 from src.free_fermions_utils import NambuIsing1D
 from src.hamiltonian_utils import frustrated_ring_jij_hz
@@ -492,14 +495,29 @@ def bounds_region(theta1, theta2, theta3, A, B, bounds, atol=1e-9):
     return (polygon if len(polygon) >= 3 else None), inside
 
 
-def _make_contour(ax, A, B, Z, cmap, vmin, vmax):
+def _make_contour(ax, A, B, Z, cmap, vmin, vmax, log=False):
     """
     Helper shared by the 2D landscape plots.
     If vmin/vmax are both given, the colormap is fixed to that range
     (levels are built to be evenly spaced within it, and values that fall
     outside are clipped/shown via the colorbar's extend triangles).
     Otherwise the color scale is computed automatically from the data.
+    log: logarithmic color scale (levels evenly spaced in log, Z > 0).
     """
+    if log:
+        positive = Z[Z > 0]
+        if vmin is None or vmax is None:
+            vmin, vmax = positive.min(), positive.max()
+        levels = np.geomspace(vmin, vmax, 101)
+        return ax.contourf(
+            A,
+            B,
+            np.clip(Z, positive.min(), None),
+            levels=levels,
+            cmap=cmap,
+            norm=LogNorm(vmin=vmin, vmax=vmax),
+            extend="both",
+        )
     if vmin is not None and vmax is not None:
         levels = np.linspace(vmin, vmax, 101)
         cont = ax.contourf(
@@ -556,6 +574,7 @@ def plot_landscape(
     vmin=None,
     vmax=None,
     region=None,
+    log=False,
     cmap="terrain",
 ):
     """
@@ -569,11 +588,14 @@ def plot_landscape(
         drawn (dashed) and the plane outside it faded; unless vmin/vmax are
         given, the color scale is set by the values inside only, so the
         points outside the bounds do not take up the color range.
+    log    : logarithmic color scale (Z > 0).
     Without region, vmin, vmax, the scale is computed from all the data.
     """
     if region is not None and (vmin is None or vmax is None):
         polygon, inside = region
         values = Z[inside & np.isfinite(Z)]
+        if log:
+            values = values[values > 0]
         if values.size:
             vmin = values.min() if vmin is None else vmin
             vmax = values.max() if vmax is None else vmax
@@ -595,12 +617,17 @@ def plot_landscape(
         figsize=(ancho_heatmap + 1, alto_total)
     )  # +1 por la colorbar
 
-    cont = _make_contour(ax, A, B, Z, cmap, vmin, vmax)
+    cont = _make_contour(ax, A, B, Z, cmap, vmin, vmax, log=log)
 
     # colorbar con tamaño fijo relativo al heatmap, no a toda la figura
     divider = make_axes_locatable(ax)
     cax = divider.append_axes("right", size="5%", pad=0.1)  # 5% del ancho del heatmap
-    plt.colorbar(cont, cax=cax, label=label)
+    cbar = plt.colorbar(cont, cax=cax, label=label)
+    if log:
+        # ticks at 1, 2, 5 x 10^n instead of the (long) values of the levels
+        cbar.ax.yaxis.set_major_locator(LogLocator(base=10, subs=(1.0, 2.0, 5.0)))
+        cbar.ax.yaxis.set_major_formatter(LogFormatterSciNotation(labelOnlyBase=False))
+        cbar.ax.yaxis.set_minor_locator(LogLocator(base=10, subs="auto"))
 
     if region is not None:
         _draw_bounds_region(ax, A, B, region[0])
@@ -917,8 +944,13 @@ class RingLandscape:
                    N <= spin_magic_max_n, free fermions (Majorana sampling,
                    NambuIsing1D.sre) above it. For N = 7 SREJax is ~150 times
                    faster per state than the sampling, and has no noise
+      robustness : spin basis, full 2^N space (FidelityRobustness with the 3
+                   global fields sum_i sigma^a_i). The sigma^y and sigma^z
+                   (spin-basis axes) fields are not Gaussian in the
+                   free-fermion picture
 
-    The spin-basis objects are only built when `magic` needs them.
+    The spin-basis objects are only built when `magic` or `robustness` needs
+    them.
 
     Parameters
     ----------
@@ -933,7 +965,7 @@ class RingLandscape:
                         T=100); 2.0 was off by up to ~0.05
     n_samples         : Majorana samples per SRE estimate (free-fermion magic)
     spin_magic_max_n  : largest N whose magic is computed in the spin basis
-    magic             : build what max_magic needs
+    magic, robustness : build what max_magic / robustness need
     """
 
     def __init__(
@@ -949,6 +981,7 @@ class RingLandscape:
         n_samples=1000,
         spin_magic_max_n=9,
         magic=False,
+        robustness=False,
     ):
         self.N = int(N)
         self.T = T
@@ -975,13 +1008,14 @@ class RingLandscape:
             bounds_opt=True,
         )
 
-        if magic and self.spin_magic:
+        if (magic and self.spin_magic) or robustness:
             jij, hz = frustrated_ring_jij_hz(self.N, J, JL, JR)
             # full 2^N space
             self.target_hamiltonian = get_longitudinal_hamiltonian(jij, hz)
             self.driver_hamiltonian = get_driver_hamiltonian(nqubits=self.N)
             self.psi_init = np.ones(2**self.N, dtype=complex) / np.sqrt(2**self.N)
 
+        if magic and self.spin_magic:
             from src.jax_utils import SREJax  # JAX only when needed
 
             # the evolution from the uniform superposition stays in the +1
@@ -991,6 +1025,11 @@ class RingLandscape:
             self.driver_hamiltonian_s = sector.project(self.driver_hamiltonian)
             self.psi_init_s = sector.project(self.psi_init)
             self.sre = SREJax(n_qubits=self.N - 1, batch_size=1000)
+
+        if robustness:
+            self.global_operators, self.global_labels = global_pauli_operators(
+                self.N
+            )
 
     # ─────────────────────────────────────────────────────────────────────────
     def schedule(self, theta):
@@ -1079,3 +1118,21 @@ class RingLandscape:
         if self.spin_magic:
             max_magic = self._max_magic_spin(s_ctrl)
         return self._final_energy(w1, s_state[-1]), max_magic, max_entanglement
+
+    def robustness(self, theta):
+        """(G_xx, G_yy, G_zz): diagonal of the robustness matrix G of
+        src/fidelity_robustness.py for the global fields lambda sum_i
+        sigma^a_i (spin-basis axes, full space): 1 - F ~ lambda^2 G_aa, F the
+        fidelity with the unperturbed final state."""
+        s_ctrl, _ = self.schedule(theta)
+        robustness = FidelityRobustness(
+            self.N,
+            self.driver_hamiltonian,
+            self.target_hamiltonian,
+            self.psi_init,
+            s_ctrl,
+            self.T,
+            operators=self.global_operators,
+            labels=self.global_labels,
+        )
+        return tuple(np.real(np.diag(robustness.compute())))

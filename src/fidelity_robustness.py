@@ -15,6 +15,10 @@ Perturbed evolution
           significant bit (SpinOperator, as in src.annealing_utils).
     f_k : optional time profile, 1 by default (static field).
 
+    Any other list of operators can be passed instead (`operators`), e.g. the
+    3 global fields of global_pauli_operators, V_a = sum_i sigma^a_i: G is
+    then 3 x 3 and G_aa = 1^T (G_local)_aa 1 is the block sum of the local G.
+
 Exact fidelity (method="exact", the default)
 --------------------------------------------
 |psi_lam(T)> from the same midpoint-rule evolution, and its population in a
@@ -97,6 +101,20 @@ def local_pauli_operators(nqubits: int):
     return operators, labels
 
 
+def global_pauli_operators(nqubits: int):
+    """
+    The 3 global fields V_a = sum_i sigma^a_i (a = x, y, z) in the full 2^N
+    space, same normalization and ordering as local_pauli_operators.
+
+    Returns (operators, labels): a list of 3 sparse matrices and ["x", "y", "z"].
+    """
+    local, _ = local_pauli_operators(nqubits)
+    operators = [
+        sum(local[a * nqubits : (a + 1) * nqubits]).tocsr() for a in range(len(AXES))
+    ]
+    return operators, list(AXES)
+
+
 class FidelityRobustness:
     """
     Fidelity of one annealing evolution under the 3N local fields
@@ -112,18 +130,22 @@ class FidelityRobustness:
     schedule_ctrl      : (nsteps,) s(t) on the CONTROL grid (cell midpoints);
                          h_driver = 1 - s, h_target = s
     tf                 : total evolution time T
-    profiles           : optional (3N, nsteps) time profiles f_k on the control
+    profiles           : optional (K, nsteps) time profiles f_k on the control
                          grid. None -> static fields, f_k = 1
     chunk_size         : perturbations propagated together in one pass (the
                          augmented vector has (chunk_size + 1) 2^N entries).
-                         None -> all 3N at once. Bounds memory, same result
+                         None -> all K at once. Bounds memory, same result
     verbose            : progress bar and summary
+    operators, labels  : optional list of K sparse (2^N, 2^N) perturbations
+                         V_k and their names. None -> the K = 3N local Paulis
+                         of local_pauli_operators (the (3, N) shapes of lam
+                         are only accepted then)
 
     Attributes (after compute())
     ----------------------------
-    G           : (3N, 3N) complex robustness matrix
+    G           : (K, K) complex robustness matrix
     cov         : G / tf^2
-    dpsi        : (3N, 2^N) derivatives |d_k>, NOT normalized (their norm is
+    dpsi        : (K, 2^N) derivatives |d_k>, NOT normalized (their norm is
                   the sensitivity)
     psi_final   : (2^N,) unperturbed final state
     lambda_star : 1 / sqrt(max eig Re G), scale of validity of the second
@@ -143,10 +165,23 @@ class FidelityRobustness:
         profiles=None,
         chunk_size=None,
         verbose=False,
+        operators=None,
+        labels=None,
     ):
         self.nqubits = int(nqubits)
         self.dim = 2**self.nqubits
-        self.n_perturbations = 3 * self.nqubits
+
+        if operators is None:
+            operators, labels = local_pauli_operators(self.nqubits)
+        elif labels is None:
+            labels = [f"V_{k}" for k in range(len(operators))]
+        if len(labels) != len(operators):
+            raise ValueError(
+                f"{len(operators)} operators but {len(labels)} labels"
+            )
+        self.operators = [sp.csr_matrix(op, dtype=complex) for op in operators]
+        self.labels = list(labels)
+        self.n_perturbations = len(self.operators)
 
         shape = (self.dim, self.dim)
         if driver_hamiltonian.shape != shape or target_hamiltonian.shape != shape:
@@ -184,7 +219,6 @@ class FidelityRobustness:
         )
         self.verbose = verbose
 
-        self.operators, self.labels = local_pauli_operators(self.nqubits)
         self._references = {}  # reference subspaces of the exact fidelity
 
         self.G = None
@@ -274,9 +308,13 @@ class FidelityRobustness:
 
     # ─────────────────────────────────────────────────────────────────────────
     def _as_lambda(self, lam) -> np.ndarray:
-        """lam as (..., 3N): accepts (3N,), (3, N) and batches of either."""
+        """lam as (..., K): accepts (K,), (3, N) for the local Paulis, and
+        batches of either."""
         lam = np.asarray(lam, dtype=float)
-        if lam.shape[-2:] == (3, self.nqubits):
+        if (
+            self.n_perturbations == 3 * self.nqubits
+            and lam.shape[-2:] == (3, self.nqubits)
+        ):
             lam = lam.reshape(lam.shape[:-2] + (self.n_perturbations,))
         if lam.shape[-1:] != (self.n_perturbations,):
             raise ValueError(
