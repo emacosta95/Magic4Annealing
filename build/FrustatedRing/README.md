@@ -9,6 +9,10 @@ Run from this folder; every script writes to `../../generated/FrustatedRing/`.
    `QuantumResourcesvsT_N={N}_T={T}_{LZR{tag} | linear}.npz`.
 2. `merge_*.py`: joins the per-T files into one `..._N={N}_...npz` (keys
    prefixed `T={T}_`). Range from the env vars `T_MIN`, `T_MAX`, `STEP`.
+   `merge_LZR.py`, `merge_linear.py` and `merge_fidelity_robustness.py` with
+   env `APPEND=1` add the new T to the existing merged file instead (to
+   extend the T range of an earlier run); they stop if the merged file is
+   missing or already has any of the new T (`src/merge_utils.py`).
 3. Optional post-processing of the merged file: `generate_more_spectrum.py`,
    `run_fidelity_robustness.py`.
 
@@ -62,10 +66,10 @@ All of them: GRAPE, 100 steps per unit T, magic by Majorana sampling
 
 | Script | Arguments | Joins |
 |---|---|---|
-| `merge_LZR.py` | `N TAG` | `run_LZR*` outputs (default T = 1..200) |
-| `merge_linear.py` / `merge_linear_more_T.py` | `N` | `run_linear*` outputs (default T = 5..400, step 5) |
+| `merge_LZR.py` | `N TAG` | `run_LZR*` outputs (default T = 1..200; `APPEND=1` adds to the existing merged file) |
+| `merge_linear.py` / `merge_linear_more_T.py` | `N` | `run_linear*` outputs (default T = 5..400, step 5; `APPEND=1` only in `merge_linear.py`) |
 | `merge_LZR_seed_scan.py` | `N T TAG` | seed scan (env `SEED_MIN`, `SEED_MAX`, default 0..199) |
-| `merge_fidelity_robustness.py` | `N [TAG]` | `run_fidelity_robustness.py` outputs |
+| `merge_fidelity_robustness.py` | `N [TAG]` | `run_fidelity_robustness.py` outputs (`APPEND=1` adds to the existing merged file) |
 
 ## Other
 

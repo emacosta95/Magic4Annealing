@@ -7,6 +7,8 @@ import sys
 
 import numpy as np
 
+from src.merge_utils import save_merged
+
 N = int(sys.argv[1])  # odd; N=9,11,13 feasible for full 2^N exact diagonalization
 
 # --- configuración ---
@@ -27,7 +29,11 @@ except ValueError:
         f"T_MAX={os.environ.get('T_MAX')}, STEP={os.environ.get('STEP')}"
     )
 
-print(f"Rango esperado: T_MIN={T_MIN}, T_MAX={T_MAX}, STEP={STEP}")
+# APPEND=1: los T nuevos se añaden al archivo combinado que ya existe en vez
+# de crear uno nuevo (p. ej. para extender el rango de T de una ejecución previa)
+APPEND = os.environ.get("APPEND", "0") == "1"
+
+print(f"Rango esperado: T_MIN={T_MIN}, T_MAX={T_MAX}, STEP={STEP}, APPEND={APPEND}")
 
 # regex para extraer el T_str del nombre de archivo
 patron_regex = re.compile(rf"QuantumResourcesvsT_N={N}_T=([\d.]+)\_linear.npz$")
@@ -68,7 +74,4 @@ extra = T_encontrados - T_esperados
 if extra:
     print(f"Aviso: se encontraron T's fuera del rango esperado: {sorted(extra)}")
 
-
-np.savez(archivo_salida, **combinado)
-print(f"Guardado: {archivo_salida}")
-print(f"Total de claves: {len(combinado)}")
+save_merged(archivo_salida, combinado, append=APPEND)
