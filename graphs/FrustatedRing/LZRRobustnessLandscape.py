@@ -99,7 +99,7 @@ if __name__ == "__main__":
     }
 
     for a, axis in enumerate(AXES):
-        path = f"../../images/FrustatedRing/RobustnessLandscapeLZR_{axis.upper()}_T={T}_N={N}"
+        path = f"../../images/FrustatedRing/LandscapesLZR/Robustness_Global{axis.upper()}/T={T}_N={N}"
         if not os.path.exists(path):
             os.makedirs(path)
 

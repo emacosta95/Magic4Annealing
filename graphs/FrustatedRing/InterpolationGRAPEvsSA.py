@@ -248,7 +248,7 @@ _, max_entanglement, coords = max_entanglement_landscape_1d(
     theta1, theta2, max_entanglement_fn_wrapper, resolution=resolution
 )
 
-path = f"../../images/FrustatedRing/InterpolationGRAPEvsSA_T={T}_N={N}/"
+path = f"../../images/FrustatedRing/InterpolationGRAPEvsSA/T={T}_N={N}/"
 if not os.path.exists(path):
     os.makedirs(path)
 

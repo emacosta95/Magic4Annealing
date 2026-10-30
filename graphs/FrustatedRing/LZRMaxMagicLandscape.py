@@ -86,7 +86,7 @@ if __name__ == "__main__":
         theta1, theta2, theta3, A, B, lzs_bounds(number_parameters)
     )
 
-    path = f"../../images/FrustatedRing/MaxMagicLandscapeLZR_T={T}_N={N}"
+    path = f"../../images/FrustatedRing/LandscapesLZR/MaxMagic/T={T}_N={N}"
     if not os.path.exists(path):
         os.makedirs(path)
 
