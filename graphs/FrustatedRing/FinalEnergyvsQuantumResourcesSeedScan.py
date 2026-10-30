@@ -1,6 +1,7 @@
 """
 Same plots as FinalEnergyvsQuantumResources.py, but at a fixed T: each point
-is one optimization from a different random initial point (seed).
+is one optimization from a different random initial point (seed). Also s_2
+against the slopes of the ramps before and after it (RampSlopes).
 Input: QuantumResourcesSeedScan_N={N}_T={T}_LZR{tag}.npz
 (build/FrustatedRing/run_LZR_seed_scan_FF_bounded.py + merge_LZR_seed_scan.py).
 """
@@ -39,6 +40,17 @@ def plateau_heights(theta):
     return raw if "bounded" in tag else 1.0 / (1.0 + np.exp(-raw))
 
 
+def segment_durations(theta):
+    """Durations of the 2M+1 segments of the LZS ansatz (ramp, plateau, ...,
+    ramp), decoded from theta as in SparseGRAPEModel (raw values with
+    bounds_opt, softplus otherwise) and rescaled so that they add up to T."""
+    theta = np.ravel(theta)
+    M = (len(theta) - 1) // 3
+    raw = theta[: 2 * M + 1]
+    durations = raw if "bounded" in tag else np.logaddexp(0.0, raw)
+    return durations / durations.sum() * T
+
+
 # position of the avoided crossing: minimum of the gap of H(s), computed by
 # the build in the job of seed 0 (sampling it along the schedules is not
 # reliable at a fixed T: fast ramps can skip the crossing between two points)
@@ -49,6 +61,7 @@ energy_error = []
 max_magic = []
 max_entanglement = []
 plateaus = []
+durations = []
 max_plateau = []
 plateau_difference = []
 crossing_passes = []
@@ -64,6 +77,7 @@ for seed in seeds:
 
     s_plateaus = plateau_heights(data[f"seed={seed}_theta"])
     plateaus.append(s_plateaus)
+    durations.append(segment_durations(data[f"seed={seed}_theta"]))
     max_plateau.append(np.max(s_plateaus))
     plateau_difference.append(s_plateaus[-1] - s_plateaus[0])
 
@@ -224,6 +238,53 @@ plt.title(title + rf", dotted: $s^*={s_star:.3f}$")
 plt.grid()
 
 filename = f"{path}PlateauMap_{suffix}"
+plt.savefig(filename, dpi=200, bbox_inches="tight")
+print(f"Guardado: {filename}")
+
+# second plateau height against the slopes ds/d(t/T) of the ramps into it
+# (s_1 -> s_2, negative when the schedule goes back) and out of it (s_2 -> 1),
+# coloured by the final energy error: checks whether changes in s_2 come with
+# changes in how fast the ramps around it cross s*
+durations_arr = np.array(durations) / T
+ramps = [
+    ((s_2 - s_1) / durations_arr[:, -3], r"Slope of the ramp $s_1 \to s_2$, $ds/d(t/T)$"),
+    ((1.0 - s_2) / durations_arr[:, -1], r"Slope of the ramp $s_2 \to 1$, $ds/d(t/T)$"),
+]
+norm = LogNorm(vmin=error_arr.min(), vmax=error_arr.max())
+fig, axes = plt.subplots(1, 2, figsize=(11, 5), sharey=True)
+for ax, (x, xlabel) in zip(axes, ramps):
+    ax.axhline(s_star, color="gray", linestyle=":", linewidth=1, zorder=1)
+    points = ax.scatter(
+        x,
+        s_2,
+        c=energy_error,
+        cmap="viridis_r",
+        norm=norm,
+        s=22,
+        edgecolors="white",
+        linewidths=0.4,
+        zorder=3,
+    )
+    ax.scatter(
+        x[best],
+        s_2[best],
+        marker="*",
+        facecolors="none",
+        s=200,
+        edgecolors="black",
+        linewidths=1.0,
+        zorder=4,
+        label=f"best seed ({seeds[best]})",
+    )
+    ax.set_xlabel(xlabel)
+    ax.grid()
+axes[0].set_ylabel(r"Second plateau height $s_2$")
+axes[0].set_ylim(-0.03, 1.03)
+axes[0].legend(loc="upper left", framealpha=0.4)
+fig.colorbar(points, ax=axes, label="Error in Energy at final time")
+fig.suptitle(title + rf", dotted: $s^*={s_star:.3f}$")
+
+filename = f"{path}RampSlopes_{suffix}"
 plt.savefig(filename, dpi=200, bbox_inches="tight")
 print(f"Guardado: {filename}")
 

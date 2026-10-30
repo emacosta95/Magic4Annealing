@@ -1,7 +1,8 @@
 """
 Final energy error vs resources over T (one point per T): scatter against
 max magic, max entanglement, plateau heights and max p1; passes through s*
-(CrossingPasses) and the (s_1, s_2) plateau map (PlateauMap).
+(CrossingPasses), the (s_1, s_2) plateau map (PlateauMap) and s_2 against
+the slopes of the ramps before and after it (RampSlopes).
 Input: merged QuantumResourcesvsT_N={N}_LZR{tag}.npz. Set tag, N at the top.
 """
 
@@ -40,6 +41,17 @@ def plateau_heights(theta):
     return raw if "bounded" in tag else 1.0 / (1.0 + np.exp(-raw))
 
 
+def segment_durations(theta):
+    """Durations of the 2M+1 segments of the LZS ansatz (ramp, plateau, ...,
+    ramp) in units of T, decoded from theta as in SparseGRAPEModel (raw
+    values with bounds_opt, softplus otherwise)."""
+    theta = np.ravel(theta)
+    M = (len(theta) - 1) // 3
+    raw = theta[: 2 * M + 1]
+    durations = raw if "bounded" in tag else np.logaddexp(0.0, raw)
+    return durations / durations.sum()
+
+
 # position of the avoided crossing: minimum of the gap over the (s, gap)
 # samples of all the runs together, since s* does not depend on T
 s_samples = np.concatenate([data[f"T={T}_schedule"] for T in Tlist])
@@ -51,6 +63,7 @@ energy_error = []
 max_magic = []
 max_entanglement = []
 plateaus = []
+durations = []
 max_plateau = []
 plateau_difference = []
 crossing_passes = []
@@ -64,6 +77,7 @@ for T in Tlist:
 
     s_plateaus = plateau_heights(data[f"T={T}_theta"])
     plateaus.append(s_plateaus)
+    durations.append(segment_durations(data[f"T={T}_theta"]))
     max_plateau.append(np.max(s_plateaus))
     plateau_difference.append(s_plateaus[-1] - s_plateaus[0])
 
@@ -179,6 +193,47 @@ plt.title(f"N={N}, LZR{tag + tag_T}" + rf", dotted: $s^*={s_star:.3f}$")
 plt.grid()
 
 filename = f"{path}PlateauMap_{suffix}"
+plt.savefig(filename, dpi=200, bbox_inches="tight")
+print(f"Guardado: {filename}")
+
+# second plateau height against the slopes ds/d(t/T) of the ramps into it
+# (s_1 -> s_2, negative when the schedule goes back) and out of it (s_2 -> 1),
+# coloured by the final energy error, as in the seed scan at fixed T
+durations_arr = np.array(durations)
+with np.errstate(divide="ignore"):
+    ramps = [
+        ((s_2 - s_1) / durations_arr[:, -3], r"Slope of the ramp $s_1 \to s_2$, $ds/d(t/T)$"),
+        ((1.0 - s_2) / durations_arr[:, -1], r"Slope of the ramp $s_2 \to 1$, $ds/d(t/T)$"),
+    ]
+# the shortest T give almost instantaneous ramps (slopes up to ~1e10, or a
+# jump of zero duration): they are left out so that the rest can be seen
+max_slope = 20
+steep = (np.abs(ramps[0][0]) > max_slope) | (np.abs(ramps[1][0]) > max_slope)
+if steep.any():
+    print(f"Aviso: |pendiente| > {max_slope} para T = {Tarr[steep].tolist()}; no se dibujan.")
+norm = LogNorm(vmin=error_arr[~steep].min(), vmax=error_arr[~steep].max())
+fig, axes = plt.subplots(1, 2, figsize=(11, 5), sharey=True)
+for ax, (x, xlabel) in zip(axes, ramps):
+    ax.axhline(s_star, color="gray", linestyle=":", linewidth=1, zorder=1)
+    points = ax.scatter(
+        x[~steep],
+        s_2[~steep],
+        c=error_arr[~steep],
+        cmap="viridis_r",
+        norm=norm,
+        s=22,
+        edgecolors="white",
+        linewidths=0.4,
+        zorder=3,
+    )
+    ax.set_xlabel(xlabel)
+    ax.grid()
+axes[0].set_ylabel(r"Second plateau height $s_2$")
+axes[0].set_ylim(-0.03, 1.03)
+fig.colorbar(points, ax=axes, label="Error in Energy at final time")
+fig.suptitle(f"N={N}, LZR{tag + tag_T}" + rf", dotted: $s^*={s_star:.3f}$")
+
+filename = f"{path}RampSlopes_{suffix}"
 plt.savefig(filename, dpi=200, bbox_inches="tight")
 print(f"Guardado: {filename}")
 
