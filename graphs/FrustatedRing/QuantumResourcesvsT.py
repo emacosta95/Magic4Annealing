@@ -48,6 +48,16 @@ tag = "_FF_bounded_ws_T0=100"  # "_NoGrad", "_step_test", "_bounded", "_no_rando
 tag_T = ""  # "_more_T" or ""
 N = 7
 nlevels = 2
+SAVE_LINEAR = True  # False: skip the linear gifs (they only depend on N and tag_T)
+
+# one folder per run; the static plots and the Entanglement/Magic gifs compare
+# linear vs LZR and go to the LZR folder
+path = f"../../images/FrustatedRing/QuantumResourcesvsT/N={N}_LZR{tag}{tag_T}/"
+path_linear = f"../../images/FrustatedRing/QuantumResourcesvsT/N={N}_linear{tag_T}/"
+os.makedirs(path, exist_ok=True)
+if SAVE_LINEAR:
+    os.makedirs(path_linear, exist_ok=True)
+
 data_linear = load_data(
     f"../../generated/FrustatedRing/QuantumResourcesvsT_N={N}_linear" + tag_T + ".npz"
 )
@@ -128,6 +138,7 @@ plt.xlabel("T")
 plt.ylabel("Minimum Gap")
 plt.legend()
 plt.grid()
+plt.savefig(f"{path}MinGap.png", dpi=200, bbox_inches="tight")
 plt.show()
 
 plt.figure(figsize=(7, 5))
@@ -159,6 +170,7 @@ plt.xlabel("T")
 plt.ylabel("Maximum Entanglement")
 plt.legend()
 plt.grid()
+plt.savefig(f"{path}MaxEntanglement.png", dpi=200, bbox_inches="tight")
 plt.show()
 
 plt.figure(figsize=(7, 5))
@@ -185,6 +197,7 @@ plt.xlabel("T")
 plt.ylabel("Maximum Magic")
 plt.legend()
 plt.grid()
+plt.savefig(f"{path}MaxMagic.png", dpi=200, bbox_inches="tight")
 plt.show()
 
 plt.figure(figsize=(7, 5))
@@ -216,6 +229,7 @@ plt.xlabel("T")
 plt.ylabel("Entanglement Integral")
 plt.legend()
 plt.grid()
+plt.savefig(f"{path}EntanglementIntegral.png", dpi=200, bbox_inches="tight")
 plt.show()
 
 plt.figure(figsize=(7, 5))
@@ -247,6 +261,7 @@ plt.xlabel("T")
 plt.ylabel("Magic Integral")
 plt.legend()
 plt.grid()
+plt.savefig(f"{path}MagicIntegral.png", dpi=200, bbox_inches="tight")
 plt.show()
 
 theoretical_energy = -N + 2.45
@@ -267,6 +282,7 @@ plt.xlabel("T")
 plt.ylabel("Error in Energy at final time")
 plt.legend()
 plt.grid()
+plt.savefig(f"{path}FinalEnergyError.png", dpi=200, bbox_inches="tight")
 plt.show()
 
 print(np.min(final_energies))
@@ -305,17 +321,11 @@ def animate_probs_linear(i):
     ax_gif.grid()
 
 
-ani = animation.FuncAnimation(
-    fig_gif, animate_probs_linear, frames=len(sequence_linear), interval=1200
-)
-path = "/home/bsc/bsc504472/repos/Magic4Annealing/images/FrustatedRing/"
-if not os.path.exists(path):
-    os.makedirs(path)
-ani.save(
-    f"{path}Probabilities_N={N}_linear" + tag_T + ".gif",
-    writer="pillow",
-    fps=0.3,
-)
+if SAVE_LINEAR:
+    ani = animation.FuncAnimation(
+        fig_gif, animate_probs_linear, frames=len(sequence_linear), interval=1200
+    )
+    ani.save(f"{path_linear}Probabilities.gif", writer="pillow", fps=0.3)
 
 
 def animate_probs_LZR(i):
@@ -346,14 +356,7 @@ def animate_probs_LZR(i):
 ani = animation.FuncAnimation(
     fig_gif, animate_probs_LZR, frames=len(sequence_LZR), interval=1200
 )
-path = "/home/bsc/bsc504472/repos/Magic4Annealing/images/FrustatedRing/"
-if not os.path.exists(path):
-    os.makedirs(path)
-ani.save(
-    f"{path}Probabilities_N={N}_LZR" + tag + tag_T + ".gif",
-    writer="pillow",
-    fps=0.3,
-)
+ani.save(f"{path}Probabilities.gif", writer="pillow", fps=0.3)
 
 
 def animate_schedule_linear(i):
@@ -377,17 +380,11 @@ def animate_schedule_linear(i):
     ax_gif.grid()
 
 
-ani = animation.FuncAnimation(
-    fig_gif, animate_schedule_linear, frames=len(sequence_linear), interval=1200
-)
-path = "/home/bsc/bsc504472/repos/Magic4Annealing/images/FrustatedRing/"
-if not os.path.exists(path):
-    os.makedirs(path)
-ani.save(
-    f"{path}Schedule_N={N}_linear" + tag_T + ".gif",
-    writer="pillow",
-    fps=0.3,
-)
+if SAVE_LINEAR:
+    ani = animation.FuncAnimation(
+        fig_gif, animate_schedule_linear, frames=len(sequence_linear), interval=1200
+    )
+    ani.save(f"{path_linear}Schedule.gif", writer="pillow", fps=0.3)
 
 
 def animate_schedule_LZR(i):
@@ -414,14 +411,7 @@ def animate_schedule_LZR(i):
 ani = animation.FuncAnimation(
     fig_gif, animate_schedule_LZR, frames=len(sequence_LZR), interval=1200
 )
-path = "/home/bsc/bsc504472/repos/Magic4Annealing/images/FrustatedRing/"
-if not os.path.exists(path):
-    os.makedirs(path)
-ani.save(
-    f"{path}Schedule_N={N}_LZR" + tag + tag_T + ".gif",
-    writer="pillow",
-    fps=0.3,
-)
+ani.save(f"{path}Schedule.gif", writer="pillow", fps=0.3)
 
 
 def animate_energies_linear(i):
@@ -454,17 +444,11 @@ def animate_energies_linear(i):
     ax_gif.grid()
 
 
-ani = animation.FuncAnimation(
-    fig_gif, animate_energies_linear, frames=len(sequence_linear), interval=1200
-)
-path = "/home/bsc/bsc504472/repos/Magic4Annealing/images/FrustatedRing/"
-if not os.path.exists(path):
-    os.makedirs(path)
-ani.save(
-    f"{path}Energies_N={N}_linear" + tag_T + ".gif",
-    writer="pillow",
-    fps=0.3,
-)
+if SAVE_LINEAR:
+    ani = animation.FuncAnimation(
+        fig_gif, animate_energies_linear, frames=len(sequence_linear), interval=1200
+    )
+    ani.save(f"{path_linear}Energies.gif", writer="pillow", fps=0.3)
 
 
 def animate_energies_LZR(i):
@@ -505,14 +489,7 @@ def animate_energies_LZR(i):
 ani = animation.FuncAnimation(
     fig_gif, animate_energies_LZR, frames=len(sequence_LZR), interval=1200
 )
-path = "/home/bsc/bsc504472/repos/Magic4Annealing/images/FrustatedRing/"
-if not os.path.exists(path):
-    os.makedirs(path)
-ani.save(
-    f"{path}Energies_N={N}_LZR" + tag + tag_T + ".gif",
-    writer="pillow",
-    fps=0.3,
-)
+ani.save(f"{path}Energies.gif", writer="pillow", fps=0.3)
 
 
 def animate_entanglement(i):
@@ -550,14 +527,7 @@ def animate_entanglement(i):
 ani = animation.FuncAnimation(
     fig_gif, animate_entanglement, frames=len(sequence_LZR), interval=1200
 )
-path = "/home/bsc/bsc504472/repos/Magic4Annealing/images/FrustatedRing/"
-if not os.path.exists(path):
-    os.makedirs(path)
-ani.save(
-    f"{path}Entanglement_N={N}_LZR" + tag + tag_T + ".gif",
-    writer="pillow",
-    fps=0.3,
-)
+ani.save(f"{path}Entanglement.gif", writer="pillow", fps=0.3)
 
 
 def animate_magic(i):
@@ -595,11 +565,4 @@ def animate_magic(i):
 ani = animation.FuncAnimation(
     fig_gif, animate_magic, frames=len(sequence_LZR), interval=1200
 )
-path = "/home/bsc/bsc504472/repos/Magic4Annealing/images/FrustatedRing/"
-if not os.path.exists(path):
-    os.makedirs(path)
-ani.save(
-    f"{path}Magic_N={N}_LZR" + tag + tag_T + ".gif",
-    writer="pillow",
-    fps=0.3,
-)
+ani.save(f"{path}Magic.gif", writer="pillow", fps=0.3)
