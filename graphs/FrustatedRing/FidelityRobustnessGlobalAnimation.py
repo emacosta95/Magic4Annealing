@@ -165,7 +165,7 @@ for a, axis in enumerate(AXES):
 
     ani = animation.FuncAnimation(fig, animate, frames=len(Tlist))
 
-    path = f"../../images/FrustatedRing/FidelityRobustnessGlobal{axis.upper()}/"
+    path = f"../../images/FrustatedRing/FidelityRobustness/Global{axis.upper()}/"
     if not os.path.exists(path):
         os.makedirs(path)
     ani.save(f"{path}{filename}", writer=animation.FFMpegWriter(fps=fps), dpi=150)

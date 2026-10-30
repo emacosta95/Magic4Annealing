@@ -153,7 +153,7 @@ for a, axis in enumerate(AXES):
     )
     plt.grid()
 
-    path = f"../../images/FrustatedRing/FidelityRobustnessGlobal{axis.upper()}/"
+    path = f"../../images/FrustatedRing/FidelityRobustness/Global{axis.upper()}/"
     if not os.path.exists(path):
         os.makedirs(path)
     plt.savefig(f"{path}{filename}", dpi=200, bbox_inches="tight")
