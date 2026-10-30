@@ -2,7 +2,7 @@
 Final energy error vs resources over T (one point per T): scatter against
 max magic, max entanglement, plateau heights and max p1; passes through s*
 (CrossingPasses), the (s_1, s_2) plateau map (PlateauMap) and s_2 against
-the slopes of the ramps before and after it (RampSlopes).
+the speeds |ds/dt| of the ramps before and after it (RampSlopes).
 Input: merged QuantumResourcesvsT_N={N}_LZR{tag}.npz. Set tag, N at the top.
 """
 
@@ -15,7 +15,7 @@ from matplotlib.colors import LogNorm
 
 tag = "_FF_bounded"  # "_FF", "_bounded", "_bounded_SA" or ""
 tag_T = ""  # "_more_T" or ""
-N = 7
+N = 13
 # "magic" or "magic_filtered" (the latter only in the FF files)
 magic_key = "magic"
 
@@ -194,40 +194,57 @@ filename = f"{path}PlateauMap.png"
 plt.savefig(filename, dpi=200, bbox_inches="tight")
 print(f"Guardado: {filename}")
 
-# second plateau height against the slopes ds/d(t/T) of the ramps into it
-# (s_1 -> s_2, negative when the schedule goes back) and out of it (s_2 -> 1),
-# coloured by the final energy error, as in the seed scan at fixed T
-durations_arr = np.array(durations)
+# second plateau height against the speed |ds/dt| of the ramps into it
+# (s_1 -> s_2) and out of it (s_2 -> 1), coloured by the final energy error.
+# Physical time, not t/T: here every point has a different T, and the speed
+# at which s* is crossed is ds/dt
+durations_arr = np.array(durations) * Tarr[:, None]
 with np.errstate(divide="ignore"):
     ramps = [
-        ((s_2 - s_1) / durations_arr[:, -3], r"Slope of the ramp $s_1 \to s_2$, $ds/d(t/T)$"),
-        ((1.0 - s_2) / durations_arr[:, -1], r"Slope of the ramp $s_2 \to 1$, $ds/d(t/T)$"),
+        (np.abs(s_2 - s_1) / durations_arr[:, -3], r"Speed of the ramp $s_1 \to s_2$, $|ds/dt|$"),
+        ((1.0 - s_2) / durations_arr[:, -1], r"Speed of the ramp $s_2 \to 1$, $|ds/dt|$"),
     ]
-# the shortest T give almost instantaneous ramps (slopes up to ~1e10, or a
+# the shortest T give almost instantaneous ramps (speeds up to ~1e10, or a
 # jump of zero duration): they are left out so that the rest can be seen
-max_slope = 20
-steep = (np.abs(ramps[0][0]) > max_slope) | (np.abs(ramps[1][0]) > max_slope)
-if steep.any():
-    print(f"Aviso: |pendiente| > {max_slope} para T = {Tarr[steep].tolist()}; no se dibujan.")
-norm = LogNorm(vmin=error_arr[~steep].min(), vmax=error_arr[~steep].max())
+max_speed = 1.0
+fast = (ramps[0][0] > max_speed) | (ramps[1][0] > max_speed)
+if fast.any():
+    print(f"Aviso: |ds/dt| > {max_speed} para T = {Tarr[fast].tolist()}; no se dibujan.")
+# the ramp s_1 -> s_2 goes back (s_2 < s_1) or forward: marker
+back = s_2 < s_1
+markers = [(back, "o", r"$s_2 < s_1$ (goes back)"), (~back, "^", r"$s_2 > s_1$")]
+norm = LogNorm(vmin=error_arr[~fast].min(), vmax=error_arr[~fast].max())
 fig, axes = plt.subplots(1, 2, figsize=(11, 5), sharey=True)
 for ax, (x, xlabel) in zip(axes, ramps):
     ax.axhline(s_star, color="gray", linestyle=":", linewidth=1, zorder=1)
-    points = ax.scatter(
-        x[~steep],
-        s_2[~steep],
-        c=error_arr[~steep],
-        cmap="viridis_r",
-        norm=norm,
-        s=22,
-        edgecolors="white",
-        linewidths=0.4,
-        zorder=3,
-    )
+    for direction, marker, _ in markers:
+        mask = direction & ~fast
+        points = ax.scatter(
+            x[mask],
+            s_2[mask],
+            c=error_arr[mask],
+            cmap="viridis_r",
+            norm=norm,
+            marker=marker,
+            s=22,
+            edgecolors="white",
+            linewidths=0.4,
+            zorder=3,
+        )
+    ax.set_xscale("log")
     ax.set_xlabel(xlabel)
     ax.grid()
 axes[0].set_ylabel(r"Second plateau height $s_2$")
 axes[0].set_ylim(-0.03, 1.03)
+# grey markers in the legend: the colour of the points is the error
+axes[0].legend(
+    handles=[
+        plt.Line2D([], [], marker=marker, color="gray", linestyle="", label=label)
+        for _, marker, label in markers
+    ],
+    loc="upper left",
+    framealpha=0.4,
+)
 fig.colorbar(points, ax=axes, label="Error in Energy at final time")
 fig.suptitle(f"N={N}, LZR{tag + tag_T}" + rf", dotted: $s^*={s_star:.3f}$")
 
