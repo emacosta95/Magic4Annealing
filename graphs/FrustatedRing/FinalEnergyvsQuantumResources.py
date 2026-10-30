@@ -97,11 +97,9 @@ if T_open:
         "la energía fundamental del Hamiltoniano problema."
     )
 
-path = "../../images/FrustatedRing/FinalEnergyvsQuantumResources/"
+path = f"../../images/FrustatedRing/FinalEnergyvsQuantumResources/N={N}_LZR{tag}{tag_T}/"
 if not os.path.exists(path):
     os.makedirs(path)
-name_tag = (tag + tag_T).lstrip("_")
-suffix = (name_tag + "_" if name_tag else "") + f"N={N}.png"
 
 resources = {
     "MaxMagic": (max_magic, "Maximum Magic"),
@@ -129,7 +127,7 @@ for name, (resource, xlabel) in resources.items():
     plt.title(f"N={N}, LZR{tag + tag_T}")
     plt.grid()
 
-    filename = f"{path}{name}_{suffix}"
+    filename = f"{path}{name}.png"
     plt.savefig(filename, dpi=200, bbox_inches="tight")
     print(f"Guardado: {filename}")
 
@@ -160,7 +158,7 @@ plt.ylabel("Error in Energy at final time")
 plt.title(f"N={N}, LZR{tag + tag_T}")
 plt.grid()
 
-filename = f"{path}CrossingPasses_{suffix}"
+filename = f"{path}CrossingPasses.png"
 plt.savefig(filename, dpi=200, bbox_inches="tight")
 print(f"Guardado: {filename}")
 
@@ -192,7 +190,7 @@ plt.ylabel(r"Second plateau height $s_2$")
 plt.title(f"N={N}, LZR{tag + tag_T}" + rf", dotted: $s^*={s_star:.3f}$")
 plt.grid()
 
-filename = f"{path}PlateauMap_{suffix}"
+filename = f"{path}PlateauMap.png"
 plt.savefig(filename, dpi=200, bbox_inches="tight")
 print(f"Guardado: {filename}")
 
@@ -233,7 +231,7 @@ axes[0].set_ylim(-0.03, 1.03)
 fig.colorbar(points, ax=axes, label="Error in Energy at final time")
 fig.suptitle(f"N={N}, LZR{tag + tag_T}" + rf", dotted: $s^*={s_star:.3f}$")
 
-filename = f"{path}RampSlopes_{suffix}"
+filename = f"{path}RampSlopes.png"
 plt.savefig(filename, dpi=200, bbox_inches="tight")
 print(f"Guardado: {filename}")
 

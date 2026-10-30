@@ -146,11 +146,9 @@ def scatter_by_passes(x):
     plt.legend(title=rf"Passes through $s^*={s_star:.3f}$")
 
 
-path = "../../images/FrustatedRing/FinalEnergyvsQuantumResourcesSeedScan/"
+path = f"../../images/FrustatedRing/FinalEnergyvsQuantumResourcesSeedScan/N={N}_T={T}_LZR{tag}/"
 if not os.path.exists(path):
     os.makedirs(path)
-name_tag = tag.lstrip("_")
-suffix = (name_tag + "_" if name_tag else "") + f"N={N}_T={T}.png"
 title = f"N={N}, T={T}, LZR{tag}, {len(seeds)} seeds"
 
 resources = {
@@ -169,7 +167,7 @@ for name, (resource, xlabel) in resources.items():
     plt.title(title)
     plt.grid()
 
-    filename = f"{path}{name}_{suffix}"
+    filename = f"{path}{name}.png"
     plt.savefig(filename, dpi=200, bbox_inches="tight")
     print(f"Guardado: {filename}")
 
@@ -193,7 +191,7 @@ plt.ylabel("Error in Energy at final time")
 plt.title(title)
 plt.grid(axis="y")
 
-filename = f"{path}CrossingPasses_{suffix}"
+filename = f"{path}CrossingPasses.png"
 plt.savefig(filename, dpi=200, bbox_inches="tight")
 print(f"Guardado: {filename}")
 
@@ -237,7 +235,7 @@ plt.ylabel(r"Second plateau height $s_2$")
 plt.title(title + rf", dotted: $s^*={s_star:.3f}$")
 plt.grid()
 
-filename = f"{path}PlateauMap_{suffix}"
+filename = f"{path}PlateauMap.png"
 plt.savefig(filename, dpi=200, bbox_inches="tight")
 print(f"Guardado: {filename}")
 
@@ -284,7 +282,7 @@ axes[0].legend(loc="upper left", framealpha=0.4)
 fig.colorbar(points, ax=axes, label="Error in Energy at final time")
 fig.suptitle(title + rf", dotted: $s^*={s_star:.3f}$")
 
-filename = f"{path}RampSlopes_{suffix}"
+filename = f"{path}RampSlopes.png"
 plt.savefig(filename, dpi=200, bbox_inches="tight")
 print(f"Guardado: {filename}")
 
