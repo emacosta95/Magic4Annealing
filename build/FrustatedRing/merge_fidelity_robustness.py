@@ -13,7 +13,7 @@ N = int(sys.argv[1])
 TAG = sys.argv[2] if len(sys.argv) > 2 else ""
 
 # --- configuración ---
-directorio = "../../generated/FrustatedRing"
+directorio = "../../generated/FrustatedRing/FidelityRobustnessvsT"
 patron_archivo = os.path.join(
     directorio, f"FidelityRobustnessvsT_N={N}_T=*_LZR{TAG}.npz"
 )

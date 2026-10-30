@@ -57,7 +57,7 @@ def final_energy(theta):
 
 
 if __name__ == "__main__":
-    filename = f"../../generated/FrustatedRing/ParametersLZR_T={T}_N={N}.npz"
+    filename = f"../../generated/FrustatedRing/ParametersLZR/ParametersLZR_T={T}_N={N}.npz"
     data = np.load(filename)
     seed_combinations = np.array(list(combinations(range(10), 3)))
     chosen_seeds = seed_combinations[int(sys.argv[3])]

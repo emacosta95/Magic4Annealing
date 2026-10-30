@@ -1,5 +1,6 @@
 """OBSOLETE test: one SA run at T=80, N=7 (not bounded despite the name). See README.md."""
 
+import os
 import time
 
 import numpy as np
@@ -164,9 +165,10 @@ time_sub = times[idx_sub]
 T_str = str(T)
 
 nombre_archivo = (
-    f"../../generated/FrustatedRing/QuantumResourcesvsT_N={N}_T={T_str}_LZR{tag}.npz"
+    f"../../generated/FrustatedRing/QuantumResourcesvsT/QuantumResourcesvsT_N={N}_T={T_str}_LZR{tag}.npz"
 )
 
+os.makedirs(os.path.dirname(nombre_archivo), exist_ok=True)
 np.savez(
     nombre_archivo,
     T=np.array([T]),  # guardamos T explícitamente también, por seguridad

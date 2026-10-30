@@ -12,7 +12,7 @@ T = int(sys.argv[2])  # the fixed T of the seed scan
 TAG = sys.argv[3]
 
 # --- configuración ---
-directorio = "../../generated/FrustatedRing"
+directorio = "../../generated/FrustatedRing/QuantumResourcesSeedScan"
 patron_archivo = os.path.join(
     directorio, f"QuantumResourcesSeedScan_N={N}_T={T}_seed=*_LZR{TAG}.npz"
 )

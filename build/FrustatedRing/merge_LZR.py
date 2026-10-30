@@ -13,7 +13,7 @@ N = int(sys.argv[1])  # odd; N=9,11,13 feasible for full 2^N exact diagonalizati
 TAG = sys.argv[2]
 
 # --- configuración ---
-directorio = "../../generated/FrustatedRing"
+directorio = "../../generated/FrustatedRing/QuantumResourcesvsT"
 patron_archivo = os.path.join(directorio, f"QuantumResourcesvsT_N={N}_T=*_LZR{TAG}.npz")
 archivo_salida = os.path.join(directorio, f"QuantumResourcesvsT_N={N}_LZR{TAG}.npz")
 

@@ -1,5 +1,6 @@
 """LZR, spin basis, GRAPE, bounded, best of 50, 10 steps per unit T (larger T range). See README.md."""
 
+import os
 import sys
 import time
 
@@ -185,8 +186,9 @@ if __name__ == "__main__":
     # formateo consistente de T para evitar problemas de precisión en el nombre
     T_str = str(T)
 
-    nombre_archivo = f"../../generated/FrustatedRing/QuantumResourcesvsT_N={N}_T={T_str}_LZR{tag}.npz"
+    nombre_archivo = f"../../generated/FrustatedRing/QuantumResourcesvsT/QuantumResourcesvsT_N={N}_T={T_str}_LZR{tag}.npz"
 
+    os.makedirs(os.path.dirname(nombre_archivo), exist_ok=True)
     np.savez(
         nombre_archivo,
         T=np.array([T]),  # guardamos T explícitamente también, por seguridad

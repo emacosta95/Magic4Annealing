@@ -1,5 +1,6 @@
 """LZR, free fermions, bounded, warm start along T from a single seed at T0. See README.md."""
 
+import os
 import sys
 import time
 
@@ -187,8 +188,9 @@ def evaluate_and_save(T, model, theta, seed):
     # formateo consistente de T para evitar problemas de precisión en el nombre
     T_str = str(T)
 
-    nombre_archivo = f"../../generated/FrustatedRing/QuantumResourcesvsT_N={N}_T={T_str}_LZR{tag}.npz"
+    nombre_archivo = f"../../generated/FrustatedRing/QuantumResourcesvsT/QuantumResourcesvsT_N={N}_T={T_str}_LZR{tag}.npz"
 
+    os.makedirs(os.path.dirname(nombre_archivo), exist_ok=True)
     np.savez(
         nombre_archivo,
         T=np.array([T]),  # guardamos T explícitamente también, por seguridad

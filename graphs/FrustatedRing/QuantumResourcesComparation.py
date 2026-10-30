@@ -59,19 +59,19 @@ tag_T2 = ""
 N2 = N
 
 data_linear = load_data(
-    f"../../generated/FrustatedRing/QuantumResourcesvsT_N={N}_linear" + tag_T + ".npz"
+    f"../../generated/FrustatedRing/QuantumResourcesvsT/QuantumResourcesvsT_N={N}_linear" + tag_T + ".npz"
 )
 data_LZR = load_data(
-    f"../../generated/FrustatedRing/QuantumResourcesvsT_N={N}_LZR"
+    f"../../generated/FrustatedRing/QuantumResourcesvsT/QuantumResourcesvsT_N={N}_LZR"
     + tag
     + tag_T
     + ".npz"
 )
 data_linear2 = load_data(
-    f"../../generated/FrustatedRing/QuantumResourcesvsT_N={N2}_linear" + tag_T2 + ".npz"
+    f"../../generated/FrustatedRing/QuantumResourcesvsT/QuantumResourcesvsT_N={N2}_linear" + tag_T2 + ".npz"
 )
 data_LZR2 = load_data(
-    f"../../generated/FrustatedRing/QuantumResourcesvsT_N={N2}_LZR"
+    f"../../generated/FrustatedRing/QuantumResourcesvsT/QuantumResourcesvsT_N={N2}_LZR"
     + tag2
     + tag_T2
     + ".npz"

@@ -1,7 +1,9 @@
 # build/FrustatedRing
 
 Data generation for the frustrated Ising ring (J, JL, JR = 1, 0.5, 0.45).
-Run from this folder; every script writes to `../../generated/FrustatedRing/`.
+Run from this folder; every script writes to `../../generated/FrustatedRing/`,
+in one subfolder per file prefix (`ParametersLZR/`, `QuantumResourcesvsT/`,
+`QuantumResourcesSeedScan/`, `FidelityRobustnessvsT/`), created if missing.
 
 ## Pipeline
 

@@ -73,7 +73,7 @@ if shutil.which("ffmpeg") is None:
 # exact fidelities and robustness matrices G of the LZR and linear schedules,
 # from build/FrustatedRing/run_fidelity_robustness.py + merge_fidelity_robustness.py
 data = load_data(
-    f"../../generated/FrustatedRing/FidelityRobustnessvsT_N={N}_LZR"
+    f"../../generated/FrustatedRing/FidelityRobustnessvsT/FidelityRobustnessvsT_N={N}_LZR"
     + tag
     + tag_T
     + ".npz"

@@ -20,7 +20,7 @@ T = 200
 magic_key = "magic"
 
 data = np.load(
-    f"../../generated/FrustatedRing/QuantumResourcesSeedScan_N={N}_T={T}_LZR"
+    f"../../generated/FrustatedRing/QuantumResourcesSeedScan/QuantumResourcesSeedScan_N={N}_T={T}_LZR"
     + tag
     + ".npz"
 )

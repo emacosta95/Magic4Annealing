@@ -59,10 +59,10 @@ if SAVE_LINEAR:
     os.makedirs(path_linear, exist_ok=True)
 
 data_linear = load_data(
-    f"../../generated/FrustatedRing/QuantumResourcesvsT_N={N}_linear" + tag_T + ".npz"
+    f"../../generated/FrustatedRing/QuantumResourcesvsT/QuantumResourcesvsT_N={N}_linear" + tag_T + ".npz"
 )
 data_LZR = load_data(
-    f"../../generated/FrustatedRing/QuantumResourcesvsT_N={N}_LZR"
+    f"../../generated/FrustatedRing/QuantumResourcesvsT/QuantumResourcesvsT_N={N}_LZR"
     + tag
     + tag_T
     + ".npz"

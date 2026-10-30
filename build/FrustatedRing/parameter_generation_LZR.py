@@ -1,5 +1,6 @@
 """Optima of 10 seeds (spin basis, bounded) for the landscape scripts. See README.md."""
 
+import os
 import sys
 import time
 
@@ -92,8 +93,9 @@ for i in seed_list:
 # formateo consistente de T para evitar problemas de precisión en el nombre
 T_str = str(T)
 
-nombre_archivo = f"../../generated/FrustatedRing/ParametersLZR_T={T_str}_N={N}.npz"
+nombre_archivo = f"../../generated/FrustatedRing/ParametersLZR/ParametersLZR_T={T_str}_N={N}.npz"
 
+os.makedirs(os.path.dirname(nombre_archivo), exist_ok=True)
 np.savez(
     nombre_archivo,
     N=np.array([N]),

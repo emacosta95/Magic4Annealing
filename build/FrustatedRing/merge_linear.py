@@ -12,7 +12,7 @@ from src.merge_utils import save_merged
 N = int(sys.argv[1])  # odd; N=9,11,13 feasible for full 2^N exact diagonalization
 
 # --- configuración ---
-directorio = "../../generated/FrustatedRing"
+directorio = "../../generated/FrustatedRing/QuantumResourcesvsT"
 patron_archivo = os.path.join(directorio, f"QuantumResourcesvsT_N={N}_T=*_linear.npz")
 archivo_salida = os.path.join(directorio, f"QuantumResourcesvsT_N={N}_linear.npz")
 

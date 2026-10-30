@@ -63,7 +63,7 @@ def observables(theta):
 
 
 if __name__ == "__main__":
-    filename = f"../../generated/FrustatedRing/ParametersLZR_T={T}_N={N}.npz"
+    filename = f"../../generated/FrustatedRing/ParametersLZR/ParametersLZR_T={T}_N={N}.npz"
     data = np.load(filename)
     chosen_seeds = [7, 8, 9]
 

@@ -36,7 +36,7 @@ lambda_range = {"x": (-0.05, 0.05), "y": (-0.05, 0.05), "z": (-0.02, 0.02)}
 n_lambdas = 101  # "exact" costs one evolution per value
 
 data = np.load(
-    f"../../generated/FrustatedRing/QuantumResourcesvsT_N={N}_LZR"
+    f"../../generated/FrustatedRing/QuantumResourcesvsT/QuantumResourcesvsT_N={N}_LZR"
     + tag
     + tag_T
     + ".npz"

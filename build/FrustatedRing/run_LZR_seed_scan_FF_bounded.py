@@ -1,5 +1,6 @@
 """LZR, free fermions, bounded, one run per seed at fixed T (seed scan). See README.md."""
 
+import os
 import sys
 import time
 
@@ -160,10 +161,11 @@ T_str = str(T)
 # prefix QuantumResourcesSeedScan (not QuantumResourcesvsT): the glob of
 # merge_LZR.py must not pick these files up
 nombre_archivo = (
-    f"../../generated/FrustatedRing/QuantumResourcesSeedScan_N={N}_T={T_str}"
+    f"../../generated/FrustatedRing/QuantumResourcesSeedScan/QuantumResourcesSeedScan_N={N}_T={T_str}"
     f"_seed={SEED}_LZR{tag}.npz"
 )
 
+os.makedirs(os.path.dirname(nombre_archivo), exist_ok=True)
 np.savez(
     nombre_archivo,
     T=np.array([T]),  # guardamos T explícitamente también, por seguridad
