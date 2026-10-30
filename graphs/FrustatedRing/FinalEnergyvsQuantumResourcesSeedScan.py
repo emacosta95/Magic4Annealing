@@ -3,7 +3,7 @@ Same plots as FinalEnergyvsQuantumResources.py, but at a fixed T: each point
 is one optimization from a different random initial point (seed). Also s_2
 against the slopes of the ramps before and after it (RampSlopes).
 Input: QuantumResourcesSeedScan_N={N}_T={T}_LZR{tag}.npz
-(build/FrustatedRing/run_LZR_seed_scan_FF_bounded.py + merge_LZR_seed_scan.py).
+(build/FrustatedRing/QuantumResourcesSeedScan/run_LZR_seed_scan_FF_bounded.py + merge_LZR_seed_scan.py).
 """
 
 import os

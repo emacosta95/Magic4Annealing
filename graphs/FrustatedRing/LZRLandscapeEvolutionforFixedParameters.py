@@ -3,7 +3,7 @@ Evolution with T of the landscape around 3 fixed vectors: the plane is the
 one through 3 optima found at T, and energy, max magic and max entanglement
 are evaluated on it at Ti = T + 10 (k - 2), k = 0..4 (one job per k).
 Usage: T N SEED1 SEED2 SEED3 k. Input: ParametersLZR_T={T}_N={N}.npz
-(build/FrustatedRing/parameter_generation_LZR.py).
+(build/FrustatedRing/LandscapesLZR/parameter_generation_LZR.py).
 """
 
 import os
@@ -40,7 +40,7 @@ J, JL, JR = 1.0, 0.5, 0.45
 
 # ── time evolution parameters ─────────────────────────────────────────────────
 # propagation steps per unit of time, as in the optimization of the
-# parameters (build/FrustatedRing/parameter_generation_LZR.py)
+# parameters (build/FrustatedRing/LandscapesLZR/parameter_generation_LZR.py)
 steps_per_unit = 100
 # time between the states the maximum magic is taken over
 magic_dt = 0.1

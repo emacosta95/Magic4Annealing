@@ -1,4 +1,4 @@
-"""Merge the per-seed outputs of run_LZR_seed_scan_FF_bounded.py. See README.md."""
+"""Merge the per-seed outputs of run_LZR_seed_scan_FF_bounded.py. See ../README.md."""
 
 import glob
 import os
@@ -12,7 +12,7 @@ T = int(sys.argv[2])  # the fixed T of the seed scan
 TAG = sys.argv[3]
 
 # --- configuración ---
-directorio = "../../generated/FrustatedRing/QuantumResourcesSeedScan"
+directorio = "../../../generated/FrustatedRing/QuantumResourcesSeedScan"
 patron_archivo = os.path.join(
     directorio, f"QuantumResourcesSeedScan_N={N}_T={T}_seed=*_LZR{TAG}.npz"
 )

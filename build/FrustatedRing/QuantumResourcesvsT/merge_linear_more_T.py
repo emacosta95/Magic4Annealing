@@ -1,4 +1,4 @@
-"""Merge the per-T outputs of run_linear_more_T.py. See README.md."""
+"""Merge the per-T outputs of run_linear_more_T.py. See ../README.md."""
 
 import glob
 import os
@@ -10,7 +10,7 @@ import numpy as np
 N = int(sys.argv[1])  # odd; N=9,11,13 feasible for full 2^N exact diagonalization
 
 # --- configuración ---
-directorio = "../../generated/FrustatedRing/QuantumResourcesvsT"
+directorio = "../../../generated/FrustatedRing/QuantumResourcesvsT"
 patron_archivo = os.path.join(
     directorio, f"QuantumResourcesvsT_N={N}_T=*_linear_more_T.npz"
 )

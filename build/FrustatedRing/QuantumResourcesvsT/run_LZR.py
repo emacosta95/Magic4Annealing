@@ -1,4 +1,4 @@
-"""OBSOLETE test: magic of the lifted 2^N state instead of the sector state. See README.md."""
+"""LZR, spin basis, GRAPE, unbounded, best of 50. See ../README.md."""
 
 import os
 import sys
@@ -19,7 +19,7 @@ from src.time_grid import make_time_grids, midpoint_evolution, subsample_indices
 from src.utils import EntanglementEntropy, Z2SymmetricSector
 
 start = time.perf_counter()
-tag = "_bounded_magic_test"
+tag = ""
 T = int(sys.argv[1])
 
 N = int(sys.argv[2])  # odd; N=9,11,13 feasible for full 2^N exact diagonalization
@@ -85,7 +85,6 @@ def build_model(seed=0, random=False):
         type=type,
         seed=seed,
         random=random,
-        bounds_opt=True,
     )
 
 
@@ -128,7 +127,7 @@ if __name__ == "__main__":
     psi_history_s = np.zeros((n_times, dim_s), dtype=complex)
     eigenstates_history_s = np.zeros((n_times, dim_s, nlevels), dtype=complex)
 
-    sre = SREJax(n_qubits=nqubits, batch_size=1000)
+    sre = SREJax(n_qubits=nqubits - 1, batch_size=1000)
     entanglement_entropy = EntanglementEntropy(nqubits=nqubits, n_A=nqubits // 2)
 
 
@@ -176,7 +175,7 @@ if __name__ == "__main__":
     idx_sub = subsample_indices(time_steps, stride)  # includes t = 0 and t = tau
     for i in tqdm(idx_sub):
         state_full = sector.lift(psi_history_s[i])
-        magic.append(sre(state_full))
+        magic.append(sre(psi_history_s[i]))
         entanglement.append(entanglement_entropy.von_neumann(state_full))
 
 
@@ -186,7 +185,7 @@ if __name__ == "__main__":
     # formateo consistente de T para evitar problemas de precisión en el nombre
     T_str = str(T)
 
-    nombre_archivo = f"../../generated/FrustatedRing/QuantumResourcesvsT/QuantumResourcesvsT_N={N}_T={T_str}_LZR{tag}.npz"
+    nombre_archivo = f"../../../generated/FrustatedRing/QuantumResourcesvsT/QuantumResourcesvsT_N={N}_T={T_str}_LZR{tag}.npz"
 
     os.makedirs(os.path.dirname(nombre_archivo), exist_ok=True)
     np.savez(

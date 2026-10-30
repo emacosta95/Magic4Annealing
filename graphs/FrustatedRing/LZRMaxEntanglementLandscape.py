@@ -1,6 +1,6 @@
 """
 Max-entanglement landscape on the plane through 3 of the 10 optima of
-ParametersLZR_T={T}_N={N}.npz (build/FrustatedRing/parameter_generation_LZR.py).
+ParametersLZR_T={T}_N={N}.npz (build/FrustatedRing/LandscapesLZR/parameter_generation_LZR.py).
 Usage: T N COMBO, COMBO = index into combinations(range(10), 3).
 Free fermions, parallel over the points of the plane.
 """
@@ -27,7 +27,7 @@ J, JL, JR = 1.0, 0.5, 0.45
 
 # ── time evolution parameters ─────────────────────────────────────────────────
 # propagation steps per unit of time, as in the optimization of the
-# parameters (build/FrustatedRing/parameter_generation_LZR.py)
+# parameters (build/FrustatedRing/LandscapesLZR/parameter_generation_LZR.py)
 steps_per_unit = 100
 
 # ── optimization parameters ───────────────────────────────────────────────────

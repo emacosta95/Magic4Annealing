@@ -1,4 +1,4 @@
-"""LZR, spin basis, GRAPE, bounded, best of 50, 10 steps per unit T (larger T range). See README.md."""
+"""LZR, spin basis, GRAPE, bounded, best of 50, 100 steps per unit T. See ../README.md."""
 
 import os
 import sys
@@ -19,7 +19,7 @@ from src.time_grid import make_time_grids, midpoint_evolution, subsample_indices
 from src.utils import EntanglementEntropy, Z2SymmetricSector
 
 start = time.perf_counter()
-tag = "_bounded_more_T"
+tag = "_bounded"
 T = int(sys.argv[1])
 
 N = int(sys.argv[2])  # odd; N=9,11,13 feasible for full 2^N exact diagonalization
@@ -61,7 +61,7 @@ tau = T  # try a range of tau; the ring is expected to need LARGE tau
 # for a linear ramp to reach the ground state (exponential
 # slowdown at the AC) -- this is exactly the motivation for
 # optimal control / LZS below.
-time_steps = int(10 * tau)  # number of propagation steps
+time_steps = int(100 * tau)  # number of propagation steps
 # midpoint rule (src/time_grid.py): the states live on `times`
 # (time_steps + 1 points, 0..tau); the schedule that drives each step is
 # evaluated at the cell midpoints `times_ctrl`
@@ -186,7 +186,7 @@ if __name__ == "__main__":
     # formateo consistente de T para evitar problemas de precisión en el nombre
     T_str = str(T)
 
-    nombre_archivo = f"../../generated/FrustatedRing/QuantumResourcesvsT/QuantumResourcesvsT_N={N}_T={T_str}_LZR{tag}.npz"
+    nombre_archivo = f"../../../generated/FrustatedRing/QuantumResourcesvsT/QuantumResourcesvsT_N={N}_T={T_str}_LZR{tag}.npz"
 
     os.makedirs(os.path.dirname(nombre_archivo), exist_ok=True)
     np.savez(

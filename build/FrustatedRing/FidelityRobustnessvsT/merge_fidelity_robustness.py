@@ -1,4 +1,4 @@
-"""Merge the per-T outputs of run_linear.py. See README.md."""
+"""Merge the per-T outputs of run_fidelity_robustness.py. See ../README.md."""
 
 import glob
 import os
@@ -9,19 +9,22 @@ import numpy as np
 
 from src.merge_utils import save_merged
 
-N = int(sys.argv[1])  # odd; N=9,11,13 feasible for full 2^N exact diagonalization
+N = int(sys.argv[1])
+TAG = sys.argv[2] if len(sys.argv) > 2 else ""
 
 # --- configuración ---
-directorio = "../../generated/FrustatedRing/QuantumResourcesvsT"
-patron_archivo = os.path.join(directorio, f"QuantumResourcesvsT_N={N}_T=*_linear.npz")
-archivo_salida = os.path.join(directorio, f"QuantumResourcesvsT_N={N}_linear.npz")
+directorio = "../../../generated/FrustatedRing/FidelityRobustnessvsT"
+patron_archivo = os.path.join(
+    directorio, f"FidelityRobustnessvsT_N={N}_T=*_LZR{TAG}.npz"
+)
+archivo_salida = os.path.join(directorio, f"FidelityRobustnessvsT_N={N}_LZR{TAG}.npz")
 
 # T_MIN, T_MAX, STEP se leen de variables de entorno (definidas en submit.sh)
 # con valores por defecto por si se ejecuta manualmente sin pasarlas
 try:
-    T_MIN = int(os.environ.get("T_MIN", 5))
-    T_MAX = int(os.environ.get("T_MAX", 400))
-    STEP = int(os.environ.get("STEP", 5))
+    T_MIN = int(os.environ.get("T_MIN", 1))
+    T_MAX = int(os.environ.get("T_MAX", 200))
+    STEP = int(os.environ.get("STEP", 1))
 except ValueError:
     raise RuntimeError(
         "T_MIN, T_MAX o STEP no son enteros válidos. "
@@ -33,10 +36,15 @@ except ValueError:
 # de crear uno nuevo (p. ej. para extender el rango de T de una ejecución previa)
 APPEND = os.environ.get("APPEND", "0") == "1"
 
-print(f"Rango esperado: T_MIN={T_MIN}, T_MAX={T_MAX}, STEP={STEP}, APPEND={APPEND}")
+print(
+    f"Rango esperado: T_MIN={T_MIN}, T_MAX={T_MAX}, STEP={STEP}, TAG='{TAG}', "
+    f"APPEND={APPEND}"
+)
 
 # regex para extraer el T_str del nombre de archivo
-patron_regex = re.compile(rf"QuantumResourcesvsT_N={N}_T=([\d.]+)\_linear.npz$")
+patron_regex = re.compile(
+    rf"FidelityRobustnessvsT_N={N}_T=([\d.]+)_LZR{re.escape(TAG)}\.npz$"
+)
 
 archivos = sorted(
     glob.glob(patron_archivo), key=lambda f: int(patron_regex.search(f).group(1))

@@ -1,4 +1,4 @@
-"""OBSOLETE test: LZR, spin basis, GRAPE, single run from seed 6. See README.md."""
+"""LZR, spin basis, GRAPE, single run from the deterministic initial point. See ../README.md."""
 
 import os
 import sys
@@ -19,7 +19,7 @@ from src.time_grid import make_time_grids, midpoint_evolution, subsample_indices
 from src.utils import EntanglementEntropy, Z2SymmetricSector
 
 start = time.perf_counter()
-tag = "_step_test"
+tag = "_no_random"
 T = int(sys.argv[1])
 
 N = int(sys.argv[2])  # odd; N=9,11,13 feasible for full 2^N exact diagonalization
@@ -82,8 +82,8 @@ model = SparseGRAPEModel(
     number_of_parameters=number_parameters,
     nsteps=time_steps,
     type=type,
-    seed=6,
-    random=True,
+    seed=1,
+    random=False,
 )
 
 trainer = SparseGRAPETrainer(model, verbose=True)
@@ -163,7 +163,7 @@ time_sub = times[idx_sub]
 T_str = str(T)
 
 nombre_archivo = (
-    f"../../generated/FrustatedRing/QuantumResourcesvsT/QuantumResourcesvsT_N={N}_T={T_str}_LZR{tag}.npz"
+    f"../../../generated/FrustatedRing/QuantumResourcesvsT/QuantumResourcesvsT_N={N}_T={T_str}_LZR{tag}.npz"
 )
 
 os.makedirs(os.path.dirname(nombre_archivo), exist_ok=True)

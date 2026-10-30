@@ -3,7 +3,7 @@ Landscape of the fidelity robustness against the global fields
 V = lambda S^a, S^a = sum_i sigma^a_i (a = x, y, z, spin-basis axes: x is the
 driver axis, z the target one), one figure per axis, on the plane through 3
 of the 10 optima of ParametersLZR_T={T}_N={N}.npz
-(build/FrustatedRing/parameter_generation_LZR.py).
+(build/FrustatedRing/LandscapesLZR/parameter_generation_LZR.py).
 Usage: T N COMBO, COMBO = index into combinations(range(10), 3).
 
 Plotted: G_{S^a S^a} of src/fidelity_robustness.py, i.e. the variance
@@ -38,7 +38,7 @@ J, JL, JR = 1.0, 0.5, 0.45
 
 # ── time evolution parameters ─────────────────────────────────────────────────
 # propagation steps per unit of time, as in the optimization of the
-# parameters (build/FrustatedRing/parameter_generation_LZR.py)
+# parameters (build/FrustatedRing/LandscapesLZR/parameter_generation_LZR.py)
 steps_per_unit = 100
 
 # ── optimization parameters ───────────────────────────────────────────────────

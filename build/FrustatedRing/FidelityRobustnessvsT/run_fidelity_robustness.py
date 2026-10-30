@@ -1,4 +1,4 @@
-"""Fidelity robustness (global fields, full 2^N) of a merged LZR file and the linear schedule. See README.md."""
+"""Fidelity robustness (global fields, full 2^N) of a merged LZR file and the linear schedule. See ../README.md."""
 
 import os
 import sys
@@ -39,7 +39,7 @@ dim = 2**nqubits
 psi_init_full = np.ones(dim, dtype=complex) / np.sqrt(dim)
 
 # ── schedules ─────────────────────────────────────────────────────────────────
-data = np.load(f"../../generated/FrustatedRing/QuantumResourcesvsT/QuantumResourcesvsT_N={N}_LZR{tag}.npz")
+data = np.load(f"../../../generated/FrustatedRing/QuantumResourcesvsT/QuantumResourcesvsT_N={N}_LZR{tag}.npz")
 # s(t) at the cell midpoints of the optimized schedule (old and new files)
 saved = schedules_from_saved(data, prefix=f"T={T}_")
 times_ctrl = saved["times_ctrl"]
@@ -101,7 +101,7 @@ print(
 T_str = str(T)
 
 nombre_archivo = (
-    f"../../generated/FrustatedRing/FidelityRobustnessvsT/FidelityRobustnessvsT_N={N}_T={T_str}_LZR{tag}.npz"
+    f"../../../generated/FrustatedRing/FidelityRobustnessvsT/FidelityRobustnessvsT_N={N}_T={T_str}_LZR{tag}.npz"
 )
 
 os.makedirs(os.path.dirname(nombre_archivo), exist_ok=True)

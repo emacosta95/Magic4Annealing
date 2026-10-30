@@ -1,4 +1,4 @@
-"""Recompute the spectrum of a merged LZR file with more levels (overwrites it). See README.md."""
+"""Recompute the spectrum of a merged LZR file with more levels (overwrites it). See ../README.md."""
 
 import re
 import sys
@@ -20,7 +20,7 @@ N = int(sys.argv[1])  # odd; N=9,11,13 feasible for full 2^N exact diagonalizati
 tag = sys.argv[2]  # tag for the output file
 nlevels = int(sys.argv[3])  # number of levels to compute in the spectrum
 
-filename = f"../../generated/FrustatedRing/QuantumResourcesvsT/QuantumResourcesvsT_N={N}_LZR" + tag + ".npz"
+filename = f"../../../generated/FrustatedRing/QuantumResourcesvsT/QuantumResourcesvsT_N={N}_LZR" + tag + ".npz"
 data = dict(np.load(filename, allow_pickle=True))
 
 Tlist = sorted(set(int(re.match(r"T=(\d+)_", k).group(1)) for k in data.keys()))
@@ -131,7 +131,7 @@ for Ti in Tlist:
         data.pop(f"T={Ti}_gap", None)
 
 filename_tmp = (
-    f"../../generated/FrustatedRing/QuantumResourcesvsT/QuantumResourcesvsT_N={N}_LZR" + tag + ".npz"
+    f"../../../generated/FrustatedRing/QuantumResourcesvsT/QuantumResourcesvsT_N={N}_LZR" + tag + ".npz"
 )
 np.savez(filename_tmp, **data)
 

@@ -1,9 +1,19 @@
 # build/FrustatedRing
 
 Data generation for the frustrated Ising ring (J, JL, JR = 1, 0.5, 0.45).
-Run from this folder; every script writes to `../../generated/FrustatedRing/`,
-in one subfolder per file prefix (`ParametersLZR/`, `QuantumResourcesvsT/`,
-`QuantumResourcesSeedScan/`, `FidelityRobustnessvsT/`), created if missing.
+Scripts are grouped in one folder per pipeline, with the same names as in
+`executables/FrustatedRing/`. Run each script from its own folder; it writes
+to `../../../generated/FrustatedRing/`, in one subfolder per file prefix
+(`ParametersLZR/`, `QuantumResourcesvsT/`, `QuantumResourcesSeedScan/`,
+`FidelityRobustnessvsT/`), created if missing.
+
+| Folder | Contents |
+|---|---|
+| `QuantumResourcesvsT/` | `run_LZR*.py`, `run_linear*.py`, `merge_LZR.py`, `merge_linear*.py`, `generate_more_spectrum.py` |
+| `QuantumResourcesSeedScan/` | `run_LZR_seed_scan_FF_bounded.py`, `merge_LZR_seed_scan.py` |
+| `FidelityRobustnessvsT/` | `run_fidelity_robustness.py`, `merge_fidelity_robustness.py` |
+| `LandscapesLZR/` | `parameter_generation_LZR.py` (writes `ParametersLZR/`) |
+| `obsolete/` | the three obsolete tests below |
 
 ## Pipeline
 
@@ -35,7 +45,7 @@ entanglement every 10 steps.
 | `run_LZR_NoGrad.py` | `_NoGrad` | COBYLA, gradient-free (`SchedulerTrainer`) | no | 100 | seed 6 only |
 | `run_LZR_no_random.py` | `_no_random` | GRAPE | no | 100 | deterministic (`random=False`) |
 
-Obsolete tests:
+Obsolete tests (in `obsolete/`):
 
 - `run_LZR_step_test.py`: `run_LZR_no_random.py` from the random initial
   point of seed 6.

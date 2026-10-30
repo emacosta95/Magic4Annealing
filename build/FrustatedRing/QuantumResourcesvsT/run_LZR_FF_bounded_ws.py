@@ -1,15 +1,16 @@
-"""LZR, free fermions, bounded, warm start along T from a single seed at T0. See README.md."""
+"""LZR, free fermions, bounded, warm start along T from the best of 200 at T0. See ../README.md."""
 
 import os
 import sys
 import time
+from functools import partial
 
 import numpy as np
 from tqdm import tqdm
 
 from src.free_fermions_grape_method import NambuGRAPEModel
 from src.free_fermions_utils import NambuIsing1D
-from src.parallel import available_cpus, make_pool
+from src.parallel import available_cpus, best_of_seeds, make_pool
 from src.sparse_grape_method import SparseGRAPETrainer
 from src.time_grid import (
     make_time_grids,
@@ -19,23 +20,22 @@ from src.time_grid import (
 
 start = time.perf_counter()
 
-# usage: python run_LZR_FF_bounded_ws_fixed_seed.py T0 N T_MIN T_MAX STEP SEED
-# Same as run_LZR_FF_bounded_ws.py, but T0 is not the best of 200 random
-# initial points: it is optimized once, from the random initial point of SEED.
-# Every other T of range(T_MIN, T_MAX + 1, STEP) starts from the optimum of
-# its neighbour; the two branches (T < T0 and T > T0) run in two processes at
-# the same time.
+# usage: python run_LZR_FF_bounded_ws.py T0 N T_MIN T_MAX STEP
+# T0 is the only T optimized from random initial points; every other T of
+# range(T_MIN, T_MAX + 1, STEP) starts from the optimum of its neighbour.
+# The random initial points of T0 are spread over all the cores of the job;
+# then the two branches (T < T0 and T > T0) run in two processes at the same
+# time.
 T0 = int(sys.argv[1])
 N = int(sys.argv[2])  # odd; cost is O(N^3) per time step, no 2^N limit
 T_MIN = int(sys.argv[3])
 T_MAX = int(sys.argv[4])
 STEP = int(sys.argv[5])
-SEED = int(sys.argv[6])  # seed of the random initial point of T0
 
-# for the filename: bounded version + warm start (ws) along the list of T
-# from a fixed seed, and the T0 and the seed of the chain, so that chains
-# seeded at different T0 or from different seeds do not overwrite each other
-tag = f"_FF_bounded_ws_fixed_seed_T0={T0}_seed={SEED}"
+# for the filename: bounded version + warm start (ws) along the list of T,
+# and the T0 of the chain, so that chains seeded at different T0 do
+# not overwrite each other
+tag = f"_FF_bounded_ws_T0={T0}"
 
 T_list = list(range(T_MIN, T_MAX + 1, STEP))
 if T0 not in T_list:
@@ -88,14 +88,29 @@ def build_model(T, seed=0, random=False):
     )
 
 
-def optimize_cold(T, seed):
-    """Single optimization from the random initial point of `seed` (no search
-    over initial points)."""
+def optimize_seed(T, seed):
+    """One optimization from the random initial point of `seed`, run in a
+    worker process (src/parallel.py). Returns only (energy, theta), all that
+    is needed to keep the best one. verbose=False: the per-iteration output
+    of many simultaneous optimizations would be unreadable (and the histories
+    it stores are not used)."""
     model = build_model(T, seed=seed, random=True)
 
-    trainer = SparseGRAPETrainer(model, verbose=True)
+    trainer = SparseGRAPETrainer(model, verbose=False)
     result = trainer.run()
-    return model, result["parameters"]
+    return result["energy"], result["parameters"]
+
+
+def optimize_cold(T, n_workers):
+    """Usual optimization: best of 200 random initial points, one process per
+    initial point, n_workers at a time."""
+    best_seed, _, theta = best_of_seeds(
+        partial(optimize_seed, T), range(200), n_workers
+    )
+
+    model = build_model(T)
+    model.load(theta)
+    return model, theta, best_seed
 
 
 def optimize_warm(T, theta_init):
@@ -188,14 +203,14 @@ def evaluate_and_save(T, model, theta, seed):
     # formateo consistente de T para evitar problemas de precisión en el nombre
     T_str = str(T)
 
-    nombre_archivo = f"../../generated/FrustatedRing/QuantumResourcesvsT/QuantumResourcesvsT_N={N}_T={T_str}_LZR{tag}.npz"
+    nombre_archivo = f"../../../generated/FrustatedRing/QuantumResourcesvsT/QuantumResourcesvsT_N={N}_T={T_str}_LZR{tag}.npz"
 
     os.makedirs(os.path.dirname(nombre_archivo), exist_ok=True)
     np.savez(
         nombre_archivo,
         T=np.array([T]),  # guardamos T explícitamente también, por seguridad
         T0=np.array([T0]),  # T where the warm-start chain was seeded
-        seed=np.array([seed]),  # seed of the random initial point of T0
+        seed=np.array([seed]),  # best random seed of the T0 optimization
         theta=np.array([theta]),
         dt=np.array([delta_t]),
         nsteps=np.array([time_steps]),
@@ -239,9 +254,9 @@ def run_branch(T_branch, theta, seed):
 if __name__ == "__main__":
     n_cpus = available_cpus()  # cores given to the job
 
-    # ── T0: optimization from the initial point of SEED ───────────────────────
-    model, theta_0 = optimize_cold(T0, SEED)
-    evaluate_and_save(T0, model, theta_0, SEED)
+    # ── T0: usual optimization ────────────────────────────────────────────────
+    model, theta_0, best_seed = optimize_cold(T0, n_cpus)
+    evaluate_and_save(T0, model, theta_0, best_seed)
     del model
 
     # ── warm start: T0 - STEP, T0 - 2*STEP, ... and T0 + STEP, ... ────────────
@@ -250,7 +265,7 @@ if __name__ == "__main__":
     branches = [b for b in (T_list[:i_0][::-1], T_list[i_0 + 1 :]) if b]
 
     with make_pool(2, blas_threads=max(1, n_cpus // 2)) as pool:
-        futures = [pool.submit(run_branch, b, theta_0, SEED) for b in branches]
+        futures = [pool.submit(run_branch, b, theta_0, best_seed) for b in branches]
         for future in futures:
             future.result()  # re-raises here whatever failed in the branch
 

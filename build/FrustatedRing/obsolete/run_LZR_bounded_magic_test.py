@@ -1,4 +1,4 @@
-"""LZR, spin basis, simulated annealing, unbounded, best of 5. See README.md."""
+"""OBSOLETE test: magic of the lifted 2^N state instead of the sector state. See ../README.md."""
 
 import os
 import sys
@@ -14,12 +14,12 @@ from src.annealing_utils import (
 )
 from src.hamiltonian_utils import frustrated_ring_jij_hz
 from src.parallel import best_of_seeds
-from src.sparse_grape_method import SimulatedAnnealingTrainer, SparseGRAPEModel
+from src.sparse_grape_method import SparseGRAPEModel, SparseGRAPETrainer
 from src.time_grid import make_time_grids, midpoint_evolution, subsample_indices
 from src.utils import EntanglementEntropy, Z2SymmetricSector
 
 start = time.perf_counter()
-tag = "_SA"
+tag = "_bounded_magic_test"
 T = int(sys.argv[1])
 
 N = int(sys.argv[2])  # odd; N=9,11,13 feasible for full 2^N exact diagonalization
@@ -61,7 +61,7 @@ tau = T  # try a range of tau; the ring is expected to need LARGE tau
 # for a linear ramp to reach the ground state (exponential
 # slowdown at the AC) -- this is exactly the motivation for
 # optimal control / LZS below.
-time_steps = int(50 * tau)  # number of propagation steps
+time_steps = int(10 * tau)  # number of propagation steps
 # midpoint rule (src/time_grid.py): the states live on `times`
 # (time_steps + 1 points, 0..tau); the schedule that drives each step is
 # evaluated at the cell midpoints `times_ctrl`
@@ -85,6 +85,7 @@ def build_model(seed=0, random=False):
         type=type,
         seed=seed,
         random=random,
+        bounds_opt=True,
     )
 
 
@@ -96,7 +97,7 @@ def optimize_seed(seed):
     it stores are not used)."""
     model = build_model(seed=seed, random=True)
 
-    trainer = SimulatedAnnealingTrainer(model, seed=seed, verbose=False)
+    trainer = SparseGRAPETrainer(model, verbose=False)
     result = trainer.run()
     return result["energy"], result["parameters"]
 
@@ -107,9 +108,9 @@ if __name__ == "__main__":
     # imported here: the workers only optimize and do not need JAX
     from src.jax_utils import SREJax
 
-    # best of 5 random initial points, one process per initial point,
+    # best of 50 random initial points, one process per initial point,
     # spread over all the cores of the job
-    best_seed, _, theta = best_of_seeds(optimize_seed, range(5))
+    best_seed, _, theta = best_of_seeds(optimize_seed, range(50))
     model = build_model()
     model.load(theta)
 
@@ -119,6 +120,7 @@ if __name__ == "__main__":
     schedule = model.get_driving(grid="state")[1]
 
     dim_s = driver_hamiltonian_s.shape[0]
+
     n_times = len(times)  # time_steps + 1 states: t = 0, ..., tau
     spectrum = np.zeros((n_times, nlevels))
     energy = np.zeros(n_times)
@@ -126,7 +128,7 @@ if __name__ == "__main__":
     psi_history_s = np.zeros((n_times, dim_s), dtype=complex)
     eigenstates_history_s = np.zeros((n_times, dim_s, nlevels), dtype=complex)
 
-    sre = SREJax(n_qubits=nqubits - 1, batch_size=1000)
+    sre = SREJax(n_qubits=nqubits, batch_size=1000)
     entanglement_entropy = EntanglementEntropy(nqubits=nqubits, n_A=nqubits // 2)
 
 
@@ -174,7 +176,7 @@ if __name__ == "__main__":
     idx_sub = subsample_indices(time_steps, stride)  # includes t = 0 and t = tau
     for i in tqdm(idx_sub):
         state_full = sector.lift(psi_history_s[i])
-        magic.append(sre(psi_history_s[i]))
+        magic.append(sre(state_full))
         entanglement.append(entanglement_entropy.von_neumann(state_full))
 
 
@@ -184,7 +186,7 @@ if __name__ == "__main__":
     # formateo consistente de T para evitar problemas de precisión en el nombre
     T_str = str(T)
 
-    nombre_archivo = f"../../generated/FrustatedRing/QuantumResourcesvsT/QuantumResourcesvsT_N={N}_T={T_str}_LZR{tag}.npz"
+    nombre_archivo = f"../../../generated/FrustatedRing/QuantumResourcesvsT/QuantumResourcesvsT_N={N}_T={T_str}_LZR{tag}.npz"
 
     os.makedirs(os.path.dirname(nombre_archivo), exist_ok=True)
     np.savez(

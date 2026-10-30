@@ -1,7 +1,7 @@
 """
 mp4 over T of the plot of FidelityRobustnessGlobal.py, from precomputed data:
 FidelityRobustnessvsT_N={N}_LZR{tag}.npz
-(build/FrustatedRing/run_fidelity_robustness.py + merge_fidelity_robustness.py).
+(build/FrustatedRing/FidelityRobustnessvsT/run_fidelity_robustness.py + merge_fidelity_robustness.py).
 """
 
 import os
@@ -71,7 +71,7 @@ if shutil.which("ffmpeg") is None:
     plt.rcParams["animation.ffmpeg_path"] = imageio_ffmpeg.get_ffmpeg_exe()
 
 # exact fidelities and robustness matrices G of the LZR and linear schedules,
-# from build/FrustatedRing/run_fidelity_robustness.py + merge_fidelity_robustness.py
+# from build/FrustatedRing/FidelityRobustnessvsT/run_fidelity_robustness.py + merge_fidelity_robustness.py
 data = load_data(
     f"../../generated/FrustatedRing/FidelityRobustnessvsT/FidelityRobustnessvsT_N={N}_LZR"
     + tag

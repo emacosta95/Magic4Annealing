@@ -1,4 +1,4 @@
-"""LZR, spin basis, GRAPE, single run from the deterministic initial point. See README.md."""
+"""LZR, spin basis, gradient-free (COBYLA), single run from seed 6. See ../README.md."""
 
 import os
 import sys
@@ -14,12 +14,12 @@ from src.annealing_utils import (
 )
 from src.hamiltonian_utils import frustrated_ring_jij_hz
 from src.jax_utils import SREJax
-from src.sparse_grape_method import SparseGRAPEModel, SparseGRAPETrainer
+from src.schedule_utils import SchedulerModel, SchedulerTrainer
 from src.time_grid import make_time_grids, midpoint_evolution, subsample_indices
 from src.utils import EntanglementEntropy, Z2SymmetricSector
 
 start = time.perf_counter()
-tag = "_no_random"
+tag = "_NoGrad"
 T = int(sys.argv[1])
 
 N = int(sys.argv[2])  # odd; N=9,11,13 feasible for full 2^N exact diagonalization
@@ -72,8 +72,7 @@ number_parameters = 2  # M=2 plateaus/arms -> n_params = 3*M+1 = 7, matching
 # variational schedule down to 7 parameters
 type = "LZS"
 
-
-model = SparseGRAPEModel(
+model = SchedulerModel(
     initial_state=psi_init_s,
     target_hamiltonian=target_hamiltonian_s,
     initial_hamiltonian=driver_hamiltonian_s,
@@ -81,14 +80,13 @@ model = SparseGRAPEModel(
     tf=tau,
     number_of_parameters=number_parameters,
     nsteps=time_steps,
-    type=type,
-    seed=1,
-    random=False,
+    type="LZS",
+    seed=6,
+    random=True,
 )
-
-trainer = SparseGRAPETrainer(model, verbose=True)
-result = trainer.run()
-
+maxiter = 500
+trainer = SchedulerTrainer(model, maxiter=maxiter, method="COBYLA", verbose=True)
+opt_results = trainer.run()
 
 # s(t) at the cell midpoints (what the propagator uses) and on the state
 # grid (instantaneous Hamiltonian of the observables, plots)
@@ -96,7 +94,7 @@ schedule_ctrl = model.get_driving(grid="control")[1]
 schedule = model.get_driving(grid="state")[1]
 
 dim_s = driver_hamiltonian_s.shape[0]
-theta = result["parameters"]
+theta = opt_results["parameters"]
 n_times = len(times)  # time_steps + 1 states: t = 0, ..., tau
 spectrum = np.zeros((n_times, nlevels))
 energy = np.zeros(n_times)
@@ -163,7 +161,7 @@ time_sub = times[idx_sub]
 T_str = str(T)
 
 nombre_archivo = (
-    f"../../generated/FrustatedRing/QuantumResourcesvsT/QuantumResourcesvsT_N={N}_T={T_str}_LZR{tag}.npz"
+    f"../../../generated/FrustatedRing/QuantumResourcesvsT/QuantumResourcesvsT_N={N}_T={T_str}_LZR{tag}.npz"
 )
 
 os.makedirs(os.path.dirname(nombre_archivo), exist_ok=True)

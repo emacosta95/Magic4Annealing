@@ -1,4 +1,4 @@
-"""Linear schedule s = t/T, free fermions. See README.md."""
+"""Linear schedule s = t/T, free fermions (same as run_linear.py, output _linear_more_T). See ../README.md."""
 
 import os
 import sys
@@ -129,9 +129,7 @@ time_sub = times[idx_sub]
 # formateo consistente de T para evitar problemas de precisión en el nombre
 T_str = str(T)
 
-nombre_archivo = (
-    f"../../generated/FrustatedRing/QuantumResourcesvsT/QuantumResourcesvsT_N={N}_T={T_str}_linear.npz"
-)
+nombre_archivo = f"../../../generated/FrustatedRing/QuantumResourcesvsT/QuantumResourcesvsT_N={N}_T={T_str}_linear_more_T.npz"
 
 os.makedirs(os.path.dirname(nombre_archivo), exist_ok=True)
 np.savez(

@@ -1,6 +1,7 @@
-"""OBSOLETE test: one SA run at T=80, N=7 (not bounded despite the name). See README.md."""
+"""OBSOLETE test: LZR, spin basis, GRAPE, single run from seed 6. See ../README.md."""
 
 import os
+import sys
 import time
 
 import numpy as np
@@ -13,15 +14,15 @@ from src.annealing_utils import (
 )
 from src.hamiltonian_utils import frustrated_ring_jij_hz
 from src.jax_utils import SREJax
-from src.sparse_grape_method import SimulatedAnnealingTrainer, SparseGRAPEModel
+from src.sparse_grape_method import SparseGRAPEModel, SparseGRAPETrainer
 from src.time_grid import make_time_grids, midpoint_evolution, subsample_indices
 from src.utils import EntanglementEntropy, Z2SymmetricSector
 
 start = time.perf_counter()
-tag = "_bounded_SA_test"
-T = 80
+tag = "_step_test"
+T = int(sys.argv[1])
 
-N = 7  # odd; N=9,11,13 feasible for full 2^N exact diagonalization
+N = int(sys.argv[2])  # odd; N=9,11,13 feasible for full 2^N exact diagonalization
 J, JL, JR = 1.0, 0.5, 0.45
 
 jij, hz = frustrated_ring_jij_hz(N, J, JL, JR)
@@ -71,34 +72,31 @@ number_parameters = 2  # M=2 plateaus/arms -> n_params = 3*M+1 = 7, matching
 # variational schedule down to 7 parameters
 type = "LZS"
 
-best_result = None
-for i in range(1):
-    model_i = SparseGRAPEModel(
-        initial_state=psi_init_s,
-        target_hamiltonian=target_hamiltonian_s,
-        initial_hamiltonian=driver_hamiltonian_s,
-        reference_hamiltonian=target_hamiltonian_s,
-        tf=tau,
-        number_of_parameters=number_parameters,
-        nsteps=time_steps,
-        type=type,
-        seed=i,
-        random=True,
-    )
 
-    trainer = SimulatedAnnealingTrainer(model_i, seed=i, verbose=True)
-    result = trainer.run()
-    if best_result is None or result["energy"] < best_result["energy"]:
-        best_result = result
-        model = model_i
-        best_seed = i
+model = SparseGRAPEModel(
+    initial_state=psi_init_s,
+    target_hamiltonian=target_hamiltonian_s,
+    initial_hamiltonian=driver_hamiltonian_s,
+    reference_hamiltonian=target_hamiltonian_s,
+    tf=tau,
+    number_of_parameters=number_parameters,
+    nsteps=time_steps,
+    type=type,
+    seed=6,
+    random=True,
+)
+
+trainer = SparseGRAPETrainer(model, verbose=True)
+result = trainer.run()
+
+
 # s(t) at the cell midpoints (what the propagator uses) and on the state
 # grid (instantaneous Hamiltonian of the observables, plots)
 schedule_ctrl = model.get_driving(grid="control")[1]
 schedule = model.get_driving(grid="state")[1]
 
 dim_s = driver_hamiltonian_s.shape[0]
-
+theta = result["parameters"]
 n_times = len(times)  # time_steps + 1 states: t = 0, ..., tau
 spectrum = np.zeros((n_times, nlevels))
 energy = np.zeros(n_times)
@@ -165,14 +163,14 @@ time_sub = times[idx_sub]
 T_str = str(T)
 
 nombre_archivo = (
-    f"../../generated/FrustatedRing/QuantumResourcesvsT/QuantumResourcesvsT_N={N}_T={T_str}_LZR{tag}.npz"
+    f"../../../generated/FrustatedRing/QuantumResourcesvsT/QuantumResourcesvsT_N={N}_T={T_str}_LZR{tag}.npz"
 )
 
 os.makedirs(os.path.dirname(nombre_archivo), exist_ok=True)
 np.savez(
     nombre_archivo,
     T=np.array([T]),  # guardamos T explícitamente también, por seguridad
-    seed=np.array([best_seed]),
+    theta=np.array([theta]),
     dt=np.array([delta_t]),
     nsteps=np.array([time_steps]),
     times=times,  # state grid: every time-resolved observable below

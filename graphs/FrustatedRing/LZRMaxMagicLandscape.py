@@ -1,6 +1,6 @@
 """
 Max-magic landscape on the plane through 3 of the 10 optima of
-ParametersLZR_T={T}_N={N}.npz (build/FrustatedRing/parameter_generation_LZR.py).
+ParametersLZR_T={T}_N={N}.npz (build/FrustatedRing/LandscapesLZR/parameter_generation_LZR.py).
 Usage: T N COMBO, COMBO = index into combinations(range(10), 3).
 Magic in the spin basis for N <= 9, free fermions above; 1 worker (JAX memory).
 """
@@ -26,7 +26,7 @@ J, JL, JR = 1.0, 0.5, 0.45
 
 # ── time evolution parameters ─────────────────────────────────────────────────
 # propagation steps per unit of time, as in the optimization of the
-# parameters (build/FrustatedRing/parameter_generation_LZR.py)
+# parameters (build/FrustatedRing/LandscapesLZR/parameter_generation_LZR.py)
 steps_per_unit = 100
 # time between the states the maximum magic is taken over
 magic_dt = 0.1

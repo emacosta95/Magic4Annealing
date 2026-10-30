@@ -1,7 +1,7 @@
 """
 General landscape: energy, max magic and max entanglement (one evolution
 per point) on the plane through 3 of the optima of
-ParametersLZR_T={T}_N={N}.npz (build/FrustatedRing/parameter_generation_LZR.py).
+ParametersLZR_T={T}_N={N}.npz (build/FrustatedRing/LandscapesLZR/parameter_generation_LZR.py).
 T, N and the 3 seeds are set at the top.
 """
 
@@ -24,7 +24,7 @@ J, JL, JR = 1.0, 0.5, 0.45
 
 # ── time evolution parameters ─────────────────────────────────────────────────
 # propagation steps per unit of time, as in the optimization of the
-# parameters (build/FrustatedRing/parameter_generation_LZR.py)
+# parameters (build/FrustatedRing/LandscapesLZR/parameter_generation_LZR.py)
 steps_per_unit = 100
 # time between the states the maximum magic is taken over
 magic_dt = 0.1

@@ -1,4 +1,4 @@
-"""LZR, free fermions, GRAPE, unbounded, best of 200. See README.md."""
+"""LZR, free fermions, GRAPE, unbounded, best of 200. See ../README.md."""
 
 import os
 import sys
@@ -154,7 +154,7 @@ if __name__ == "__main__":
     # formateo consistente de T para evitar problemas de precisión en el nombre
     T_str = str(T)
 
-    nombre_archivo = f"../../generated/FrustatedRing/QuantumResourcesvsT/QuantumResourcesvsT_N={N}_T={T_str}_LZR{tag}.npz"
+    nombre_archivo = f"../../../generated/FrustatedRing/QuantumResourcesvsT/QuantumResourcesvsT_N={N}_T={T_str}_LZR{tag}.npz"
 
     os.makedirs(os.path.dirname(nombre_archivo), exist_ok=True)
     np.savez(
