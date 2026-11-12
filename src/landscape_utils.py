@@ -1,13 +1,25 @@
 """
 Landscapes of the LZR schedule of the frustrated ring: observables as a
 function of theta on a plane through 3 points (or a line through 2) of
-parameter space. Backend of graphs/FrustatedRing/LZR*Landscape.py.
+parameter space. Backend of graphs/FrustatedRing/LZR*Landscape*.py.
+
+Two kinds of plane through the same 3 optima:
+  - Theta plane (LZR*ThetaLandscape*.py): in the optimizer parameters theta
+    = (D_0..D_2M, s_1..s_M), raw durations not normalized. Scaling all the
+    D leaves the schedule unchanged, so this plane mixes in a direction that
+    does nothing.
+  - Schedule plane (LZR*ScheduleLandscape*.py): in the schedule variables
+    phi = (tau_0/T..tau_2M/T, s_1..s_M) of schedule_coordinates. phi is
+    itself a valid theta (same schedule), so the scan is unchanged.
 
   - RingLandscape: theta -> final energy, max entanglement, max magic,
     robustness (free fermions; spin basis only where needed).
   - Geometry/scan: build_plane_basis, plane_grid, scan_plane (parallel),
-    bounds_region (part of the plane inside the optimization bounds).
-  - Plots: plot_landscape and the plot_*_landscape(_1d) wrappers.
+    bounds_region (part of the plane inside the optimization bounds),
+    schedule_coordinates / schedule_coordinate_labels.
+  - Plots: plot_landscape and the plot_*_landscape(_1d) wrappers. Optional
+    panels under the heatmap: s(t) of the 3 points (schedules) and the
+    components of e1, e2 (basis).
   - Older spin-basis function API (energy_fn, max_magic_fn, ...): only
     used by InterpolationGRAPEvsSA.py.
 """
@@ -202,6 +214,32 @@ def max_entanglement_fn(
         driver_hamiltonian_s,
         target_hamiltonian_s,
     )
+
+
+def schedule_coordinates(theta, number_parameters):
+    """
+    LZS parameters with bounds_opt=True, theta = (D_0..D_2M, s_1..s_M)
+    (M = number_parameters), -> schedule variables
+    phi = (tau_0/T, ..., tau_2M/T, s_1, ..., s_M), tau_k / T = D_k / sum(D).
+
+    The model rescales the durations to sum to T (tau = T D / sum(D)) and
+    those of phi already sum to 1, so phi decodes to the same schedule as
+    theta, for any T, and can be passed wherever a theta is expected.
+    Every affine combination of such points keeps sum(tau)/T = 1, so a plane
+    through them stays in the schedule variables.
+    """
+    theta = np.asarray(theta, dtype=float)
+    n_seg = 2 * number_parameters + 1
+    durations = theta[:n_seg]
+    return np.concatenate((durations / durations.sum(), theta[n_seg:]))
+
+
+def schedule_coordinate_labels(number_parameters):
+    """LaTeX labels of the components of schedule_coordinates."""
+    n_seg = 2 * number_parameters + 1
+    return [rf"$\tau_{k}/T$" for k in range(n_seg)] + [
+        rf"$s_{m}$" for m in range(1, number_parameters + 1)
+    ]
 
 
 def build_plane_basis(theta1, theta2, theta3):
@@ -576,6 +614,69 @@ def _draw_bounds_region(ax, A, B, polygon):
         ax.legend(loc="upper right", fontsize=8, framealpha=0.85)
 
 
+# colors of the 3 points when the schedule panel is drawn (marker on the
+# heatmap and its curve s(t)): slots 1-3 of the dataviz reference categorical
+# palette, validated as a set
+POINT_COLORS = {"theta1": "#2a78d6", "theta2": "#eb6834", "theta3": "#1baf7a"}
+
+_POINT_NAMES = {
+    "theta1": r"$\theta_1$",
+    "theta2": r"$\theta_2$",
+    "theta3": r"$\theta_3$",
+}
+
+
+def _draw_heatmap(
+    ax, cax, A, B, Z, coords, label, cmap, vmin, vmax, region, log, colors=None
+):
+    """
+    Heatmap of Z on (A, B) with its colorbar on cax, the bounds region and
+    the points of coords. colors: name -> marker color (black-edged); None
+    draws them all red, as before the schedule panel existed.
+    """
+    cont = _make_contour(ax, A, B, Z, cmap, vmin, vmax, log=log)
+
+    cbar = plt.colorbar(cont, cax=cax, label=label)
+    if log:
+        # ticks at 1, 2, 5 x 10^n instead of the (long) values of the levels
+        cbar.ax.yaxis.set_major_locator(LogLocator(base=10, subs=(1.0, 2.0, 5.0)))
+        cbar.ax.yaxis.set_major_formatter(LogFormatterSciNotation(labelOnlyBase=False))
+        cbar.ax.yaxis.set_minor_locator(LogLocator(base=10, subs="auto"))
+
+    if region is not None:
+        _draw_bounds_region(ax, A, B, region[0])
+
+    for name, (a, b) in coords.items():
+        if colors is None:
+            marker = dict(color="red")
+        else:
+            marker = dict(
+                color=colors[name], markeredgecolor="black", markeredgewidth=1.0
+            )
+        ax.plot(a, b, "o", markersize=8, zorder=4, **marker)
+        ax.annotate(
+            _POINT_NAMES[name],
+            (a, b),
+            textcoords="offset points",
+            xytext=(6, 6),
+            color="white",
+            fontsize=12,
+            zorder=4,
+            # dark outline: readable on the faded (white) part of the plane too
+            path_effects=[path_effects.withStroke(linewidth=2, foreground="black")],
+        )
+
+    ax.set_xlabel("a (direction $e_1$)")
+    ax.set_ylabel("b (direction $e_2$)")
+    ax.set_aspect("equal")
+
+
+def _energies_text(coords, energies):
+    return "       ".join(
+        [rf"{_POINT_NAMES[name]}: $E$ = {energies[name]:.6f}" for name in coords]
+    )
+
+
 def plot_landscape(
     A,
     B,
@@ -590,6 +691,8 @@ def plot_landscape(
     region=None,
     log=False,
     cmap="terrain",
+    schedules=None,
+    basis=None,
 ):
     """
     2D landscape Z on the plane grid (A, B), with the three parameter
@@ -603,7 +706,15 @@ def plot_landscape(
         given, the color scale is set by the values inside only, so the
         points outside the bounds do not take up the color range.
     log    : logarithmic color scale (Z > 0).
+    schedules : optional {name: (t/T, s(t))} of the points of coords
+        (RingLandscape.schedule_curves). Drawn in a panel under the heatmap,
+        one color per point (POINT_COLORS, also used for the markers), with
+        the final energies in its legend instead of the text box.
+    basis  : optional (e1, e2, component labels), e.g. from build_plane_basis
+        and schedule_coordinate_labels. Bars of the components of e1, e2 in
+        a panel under the heatmap (and under the schedules).
     Without region, vmin, vmax, the scale is computed from all the data.
+    Without schedules and basis, the figure is the original one.
     """
     if region is not None and (vmin is None or vmax is None):
         polygon, inside = region
@@ -615,6 +726,25 @@ def plot_landscape(
             vmax = values.max() if vmax is None else vmax
             if vmax <= vmin:
                 vmax = vmin + 1e-12 * max(1.0, abs(vmin))
+
+    if schedules is not None or basis is not None:
+        return _plot_landscape_panels(
+            A,
+            B,
+            Z,
+            coords,
+            energies,
+            label,
+            title,
+            save_path,
+            vmin,
+            vmax,
+            region,
+            log,
+            cmap,
+            schedules,
+            basis,
+        )
 
     # rango real de datos
     rango_a = A.max() - A.min()
@@ -631,61 +761,129 @@ def plot_landscape(
         figsize=(ancho_heatmap + 1, alto_total)
     )  # +1 por la colorbar
 
-    cont = _make_contour(ax, A, B, Z, cmap, vmin, vmax, log=log)
-
     # colorbar con tamaño fijo relativo al heatmap, no a toda la figura
     divider = make_axes_locatable(ax)
     cax = divider.append_axes("right", size="5%", pad=0.1)  # 5% del ancho del heatmap
-    cbar = plt.colorbar(cont, cax=cax, label=label)
-    if log:
-        # ticks at 1, 2, 5 x 10^n instead of the (long) values of the levels
-        cbar.ax.yaxis.set_major_locator(LogLocator(base=10, subs=(1.0, 2.0, 5.0)))
-        cbar.ax.yaxis.set_major_formatter(LogFormatterSciNotation(labelOnlyBase=False))
-        cbar.ax.yaxis.set_minor_locator(LogLocator(base=10, subs="auto"))
 
-    if region is not None:
-        _draw_bounds_region(ax, A, B, region[0])
-
-    nombres_latex = {
-        "theta1": r"$\theta_1$",
-        "theta2": r"$\theta_2$",
-        "theta3": r"$\theta_3$",
-    }
-
-    for name, (a, b) in coords.items():
-        ax.plot(a, b, "o", color="red", markersize=8, zorder=4)
-        ax.annotate(
-            nombres_latex[name],
-            (a, b),
-            textcoords="offset points",
-            xytext=(6, 6),
-            color="white",
-            fontsize=12,
-            zorder=4,
-            # dark outline: readable on the faded (white) part of the plane too
-            path_effects=[path_effects.withStroke(linewidth=2, foreground="black")],
-        )
-
-    ax.set_xlabel("a (direction $e_1$)")
-    ax.set_ylabel("b (direction $e_2$)")
+    _draw_heatmap(ax, cax, A, B, Z, coords, label, cmap, vmin, vmax, region, log)
     ax.set_title(title)
-    ax.set_aspect("equal")
 
     # bottom como fracción del alto total
     fig.subplots_adjust(bottom=alto_texto / alto_total)
 
-    texto_energias = "       ".join(
-        [rf"{nombres_latex[name]}: $E$ = {energies[name]:.6f}" for name in coords]
-    )
     fig.text(
         0.5,
         0.2,
-        texto_energias,
+        _energies_text(coords, energies),
         fontsize=10,
         ha="center",
         va="center",
         bbox=dict(boxstyle="round", facecolor="whitesmoke", edgecolor="gray"),
     )
+
+    if save_path is not None:
+        plt.savefig(save_path, dpi=300)
+
+    plt.show()
+    return fig
+
+
+def _plot_landscape_panels(
+    A,
+    B,
+    Z,
+    coords,
+    energies,
+    label,
+    title,
+    save_path,
+    vmin,
+    vmax,
+    region,
+    log,
+    cmap,
+    schedules,
+    basis,
+):
+    """plot_landscape with the schedule and/or basis panels under the
+    heatmap. Layout in inches, every panel as wide as the heatmap."""
+    width = 6.0  # heatmap
+    height = width * (B.max() - B.min()) / (A.max() - A.min())
+    left, right, top, bottom = 1.0, 1.1, 0.6, 0.6
+    cbar_pad, cbar_width = 0.1, 0.3
+    gap = 1.05  # between panels: x labels + the legend row of the next one
+    schedule_height = 2.2 if schedules is not None else 0.6  # else: text box
+    basis_height = 1.8
+
+    fig_w = left + width + cbar_pad + cbar_width + right
+    fig_h = top + height + gap + schedule_height + bottom
+    if basis is not None:
+        fig_h += gap + basis_height
+    fig = plt.figure(figsize=(fig_w, fig_h))
+
+    def add_axes(x, y, w, h):  # inches from the bottom-left corner
+        return fig.add_axes([x / fig_w, y / fig_h, w / fig_w, h / fig_h])
+
+    y = fig_h - top - height
+    ax = add_axes(left, y, width, height)
+    cax = add_axes(left + width + cbar_pad, y, cbar_width, height)
+    colors = POINT_COLORS if schedules is not None else None
+    _draw_heatmap(
+        ax, cax, A, B, Z, coords, label, cmap, vmin, vmax, region, log, colors
+    )
+    ax.set_title(title)
+
+    y -= gap + schedule_height
+    if schedules is not None:
+        ax_s = add_axes(left, y, width, schedule_height)
+        for name, (t_over_T, s) in schedules.items():
+            ax_s.plot(
+                t_over_T,
+                s,
+                color=POINT_COLORS[name],
+                linewidth=2,
+                label=rf"{_POINT_NAMES[name]}: $E$ = {energies[name]:.6f}",
+            )
+        ax_s.set_xlim(0, 1)
+        ax_s.set_ylim(-0.03, 1.03)
+        ax_s.set_xlabel("$t/T$")
+        ax_s.set_ylabel("$s(t)$")
+        ax_s.grid(alpha=0.3)
+        # one row above the panel: inside it would cover the curves
+        ax_s.legend(
+            loc="lower center", bbox_to_anchor=(0.5, 1.0), ncol=3, fontsize=8,
+            frameon=False,
+        )
+    else:
+        fig.text(
+            (left + width / 2) / fig_w,
+            (y + schedule_height / 2) / fig_h,
+            _energies_text(coords, energies),
+            fontsize=10,
+            ha="center",
+            va="center",
+            bbox=dict(boxstyle="round", facecolor="whitesmoke", edgecolor="gray"),
+        )
+
+    if basis is not None:
+        e1, e2, labels = basis
+        y -= gap + basis_height
+        ax_b = add_axes(left, y, width, basis_height)
+        x = np.arange(len(labels))
+        bar = 0.38
+        ax_b.bar(x - bar / 2, e1, bar, color="0.25", label="$e_1$ (axis a)")
+        ax_b.bar(x + bar / 2, e2, bar, color="0.65", label="$e_2$ (axis b)")
+        ax_b.axhline(0, color="black", linewidth=0.8)
+        ax_b.set_xticks(x)
+        ax_b.set_xticklabels(labels)
+        lim = 1.15 * max(np.abs(e1).max(), np.abs(e2).max())
+        ax_b.set_ylim(-lim, lim)
+        ax_b.set_ylabel("Component")
+        ax_b.grid(axis="y", alpha=0.3)
+        ax_b.legend(
+            loc="lower center", bbox_to_anchor=(0.5, 1.0), ncol=2, fontsize=8,
+            frameon=False,
+        )
 
     if save_path is not None:
         plt.savefig(save_path, dpi=300)
@@ -705,10 +903,25 @@ def plot_energy_landscape(
     vmin=None,
     vmax=None,
     region=None,
+    schedules=None,
+    basis=None,
 ):
-    """plot_landscape of the final energy (see there for vmin, vmax, region)."""
+    """plot_landscape of the final energy (see there for vmin, vmax, region,
+    schedules, basis)."""
     return plot_landscape(
-        A, B, E, coords, energies, "Final energy", title, save_path, vmin, vmax, region
+        A,
+        B,
+        E,
+        coords,
+        energies,
+        "Final energy",
+        title,
+        save_path,
+        vmin,
+        vmax,
+        region,
+        schedules=schedules,
+        basis=basis,
     )
 
 
@@ -780,8 +993,11 @@ def plot_max_magic_landscape(
     vmin=None,
     vmax=None,
     region=None,
+    schedules=None,
+    basis=None,
 ):
-    """plot_landscape of the maximum magic (see there for vmin, vmax, region)."""
+    """plot_landscape of the maximum magic (see there for vmin, vmax, region,
+    schedules, basis)."""
     return plot_landscape(
         A,
         B,
@@ -794,6 +1010,8 @@ def plot_max_magic_landscape(
         vmin,
         vmax,
         region,
+        schedules=schedules,
+        basis=basis,
     )
 
 
@@ -864,8 +1082,11 @@ def plot_max_entanglement_landscape(
     vmin=None,
     vmax=None,
     region=None,
+    schedules=None,
+    basis=None,
 ):
-    """plot_landscape of the maximum entanglement (see there for vmin, vmax, region)."""
+    """plot_landscape of the maximum entanglement (see there for vmin, vmax, region,
+    schedules, basis)."""
     return plot_landscape(
         A,
         B,
@@ -878,6 +1099,8 @@ def plot_max_entanglement_landscape(
         vmin,
         vmax,
         region,
+        schedules=schedules,
+        basis=basis,
     )
 
 
@@ -1052,6 +1275,14 @@ class RingLandscape:
         s_ctrl = self.model.get_driving(theta, grid="control")[1]
         s_state = self.model.get_driving(theta, grid="state")[1]
         return s_ctrl, s_state
+
+    def schedule_curves(self, thetas):
+        """{name: (t/T, s(t))} on the state grid, for the schedules panel of
+        plot_landscape. thetas: {name: theta}."""
+        return {
+            name: (self.times / self.T, self.schedule(theta)[1])
+            for name, theta in thetas.items()
+        }
 
     def _nambu_states(self, s_ctrl):
         """(k, W1 [2N, N]) for the states at times[k], k = 0..nsteps."""

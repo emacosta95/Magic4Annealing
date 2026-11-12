@@ -1,7 +1,8 @@
 """
 Evolution with T of the landscape around 3 fixed vectors: the plane is the
-one through 3 optima found at T, and energy, max magic and max entanglement
-are evaluated on it at Ti = T + 10 (k - 2), k = 0..4 (one job per k).
+theta plane (optimizer parameters, raw durations)
+through 3 optima found at T, and energy, max magic and max entanglement are
+evaluated on it at Ti = T + 10 (k - 2), k = 0..4 (one job per k).
 Usage: T N SEED1 SEED2 SEED3 k. Input: ParametersLZR_T={T}_N={N}.npz
 (build/FrustatedRing/LandscapesLZR/parameter_generation_LZR.py).
 """
@@ -102,7 +103,7 @@ if __name__ == "__main__":
         theta1, theta2, theta3, A, B, lzs_bounds(number_parameters)
     )
 
-    path = f"../../images/FrustatedRing/LandscapesLZR/Evolution/T={T}_N={N}_seeds={chosen_seeds[0]}_{chosen_seeds[1]}_{chosen_seeds[2]}"
+    path = f"../../images/FrustatedRing/LandscapesLZRTheta/Evolution/T={T}_N={N}_seeds={chosen_seeds[0]}_{chosen_seeds[1]}_{chosen_seeds[2]}"
     if not os.path.exists(path):
         os.makedirs(path)
 

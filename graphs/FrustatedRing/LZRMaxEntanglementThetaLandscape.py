@@ -1,18 +1,9 @@
 """
-Landscape of the fidelity robustness against the global fields
-V = lambda S^a, S^a = sum_i sigma^a_i (a = x, y, z, spin-basis axes: x is the
-driver axis, z the target one), one figure per axis, on the plane through 3
-of the 10 optima of ParametersLZR_T={T}_N={N}.npz
-(build/FrustatedRing/LandscapesLZR/parameter_generation_LZR.py).
+Max-entanglement landscape on the theta plane (optimizer parameters, raw durations)
+through 3 of the 10 optima of
+ParametersLZR_T={T}_N={N}.npz (build/FrustatedRing/LandscapesLZR/parameter_generation_LZR.py).
 Usage: T N COMBO, COMBO = index into combinations(range(10), 3).
-
-Plotted: G_{S^a S^a} of src/fidelity_robustness.py, i.e. the variance
-Var(int_0^T S^a(t) dt) in the Heisenberg picture, with
-1 - F ~ lambda^2 G_{S^a S^a}, F the fidelity with the unperturbed final state.
-Not the single-qubit G_{(a,i),(a,i)}: G_{S^a S^a} = sum_{i,j} G_{(a,i),(a,j)},
-cross terms between sites included.
-Spin basis, full 2^N space (sigma^y and sigma^z leave the Z2 +1 sector and
-are not Gaussian in free fermions).
+Free fermions, parallel over the points of the plane.
 """
 
 import os
@@ -21,19 +12,18 @@ from itertools import combinations
 
 import numpy as np
 
-from src.fidelity_robustness import AXES
 from src.landscape_utils import (
     RingLandscape,
     bounds_region,
-    plot_landscape,
-    scan_plane,
+    max_entanglement_landscape,
+    plot_max_entanglement_landscape,
 )
 from src.parallel import available_cpus
 from src.sparse_grape_method import lzs_bounds
 
 T = int(sys.argv[1])
 
-N = int(sys.argv[2])  # odd; full 2^N space, the augmented vector has 4 * 2^N entries
+N = int(sys.argv[2])  # odd; free fermions, no 2^N limit
 J, JL, JR = 1.0, 0.5, 0.45
 
 # ── time evolution parameters ─────────────────────────────────────────────────
@@ -49,7 +39,8 @@ resolution = 50
 # processes the points of the plane are spread over (all the cores of the job)
 n_workers = available_cpus()
 
-# theta -> (G_{S^x S^x}, G_{S^y S^y}, G_{S^z S^z}) (src/landscape_utils.py)
+# theta -> maximum half-chain entanglement, in free fermions
+# (src/landscape_utils.py)
 landscape = RingLandscape(
     N,
     T,
@@ -58,14 +49,13 @@ landscape = RingLandscape(
     J=J,
     JL=JL,
     JR=JR,
-    robustness=True,
 )
 
 
-def robustness(theta):
+def max_entanglement(theta):
     # module level: the worker processes of the scan call it. They import
     # this file again (everything above), not what follows the guard
-    return landscape.robustness(theta)
+    return landscape.max_entanglement(theta)
 
 
 if __name__ == "__main__":
@@ -78,12 +68,11 @@ if __name__ == "__main__":
     theta2 = data["theta_list"][chosen_seeds[1]]
     theta3 = data["theta_list"][chosen_seeds[2]]
 
-    # G[..., a] = G_{S^a S^a}, the three axes from the same augmented evolution
-    A, B, G, coords = scan_plane(
+    A, B, max_entanglement_values, coords = max_entanglement_landscape(
         theta1,
         theta2,
         theta3,
-        robustness,
+        max_entanglement,
         resolution=resolution,
         n_workers=n_workers,
     )
@@ -92,28 +81,25 @@ if __name__ == "__main__":
         theta1, theta2, theta3, A, B, lzs_bounds(number_parameters)
     )
 
+    path = f"../../images/FrustatedRing/LandscapesLZRTheta/MaxEntanglement/T={T}_N={N}"
+    if not os.path.exists(path):
+        os.makedirs(path)
+
+    filename_img_max_entanglement = f"{path}/{chosen_seeds[0]}_{chosen_seeds[1]}_{chosen_seeds[2]}.png"
+
     energies = {
         "theta1": landscape.energy(theta1),
         "theta2": landscape.energy(theta2),
         "theta3": landscape.energy(theta3),
     }
 
-    for a, axis in enumerate(AXES):
-        path = f"../../images/FrustatedRing/LandscapesLZR/Robustness_Global{axis.upper()}/T={T}_N={N}"
-        if not os.path.exists(path):
-            os.makedirs(path)
-
-        # G_{S^a S^a} spans orders of magnitude over the plane: log color
-        # scale (1 - F ~ lambda^2 G_{S^a S^a}, see the top of the file)
-        plot_landscape(
-            A,
-            B,
-            G[..., a],
-            coords,
-            energies,
-            label=rf"$G_{{S^{axis} S^{axis}}}$",
-            title=rf"Robustness landscape, $V = \lambda S^{axis}$, $S^{axis} = \Sigma_i\, \sigma^{axis}_i$, T={T} N={N}",
-            save_path=f"{path}/{chosen_seeds[0]}_{chosen_seeds[1]}_{chosen_seeds[2]}.png",
-            region=region,
-            log=True,
-        )
+    plot_max_entanglement_landscape(
+        A,
+        B,
+        max_entanglement_values,
+        coords,
+        energies,
+        title=f"Max entanglement landscape T={T} N={N}",
+        save_path=filename_img_max_entanglement,
+        region=region,
+    )

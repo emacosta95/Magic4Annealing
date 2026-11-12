@@ -87,7 +87,9 @@ All of them: GRAPE, 100 steps per unit T, magic by Majorana sampling
 
 - `parameter_generation_LZR.py T N`: spin basis, bounded GRAPE from seeds
   0..9, saves all 10 optima to `ParametersLZR_T={T}_N={N}.npz`. Input of the
-  `graphs/FrustatedRing/LZR*Landscape.py` scripts.
+  `graphs/FrustatedRing/LZR*ThetaLandscape*.py` (plane in the raw parameters
+  theta) and `LZR*ScheduleLandscape*.py` (plane in the schedule variables
+  tau_k/T, s_m) scripts.
 - `run_fidelity_robustness.py T N [TAG]`: reads the merged
   `QuantumResourcesvsT_N={N}_LZR{TAG}.npz`. Full 2^N space: robustness
   matrices (second order) and exact fidelity under global fields, for the
