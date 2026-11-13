@@ -1,10 +1,13 @@
 """
 Final energy error vs resources over T (one point per T): scatter against
-max magic, max entanglement, plateau heights and max p1; passes through s*
-(CrossingPasses), the (s_1, s_2) plateau map (PlateauMap) and s_2 against
-the speeds |ds/dt| of the ramps before and after it (RampSlopes); maximum
+max magic, max entanglement, plateau heights, max p1 and max (1 - p0)
+(MaxExcited); passes through s*
+(CrossingPasses), the (s_1, s_2) plateau map (PlateauMap) and s_1, s_2
+against the speeds |ds/dt| of the three ramps (S1vsRampSlopes,
+S2vsRampSlopes); maximum
 magic against s_1, s_2 (MaxMagicvsPlateaus) and against the time at which it
-is reached (MaxMagicvsTime).
+is reached (MaxMagicvsTime); final error and maximum magic against the ramp
+speeds (ErrorvsRampSlopes, MaxMagicvsRampSlopes).
 Input: merged QuantumResourcesvsT_N={N}_LZR{tag}.npz. Set tag, N at the top.
 """
 
@@ -71,6 +74,7 @@ max_plateau = []
 plateau_difference = []
 crossing_passes = []
 max_p1 = []
+max_excited = []
 T_open = []
 for T in Tlist:
     # error with respect to the instantaneous ground state at the final time
@@ -94,6 +98,8 @@ for T in Tlist:
     crossing_passes.append(np.count_nonzero(np.diff(side)))
 
     max_p1.append(np.max(data[f"T={T}_p1"]))
+    # population out of the ground state (p0: lowest level, even sector)
+    max_excited.append(np.max(1.0 - data[f"T={T}_p0"]))
     if not np.isclose(data[f"T={T}_schedule"][-1], 1.0):
         T_open.append(T)
 
@@ -113,6 +119,7 @@ resources = {
     "MaxPlateau": (max_plateau, r"Maximum plateau height $\max(s_1, s_2)$"),
     "PlateauDifference": (plateau_difference, r"Plateau height difference $s_2 - s_1$"),
     "MaxP1": (max_p1, r"Maximum first excited state population $\max_t\, p_1$"),
+    "MaxExcited": (max_excited, r"Maximum excited population $\max_t\,(1 - p_0)$"),
 }
 for name, (resource, xlabel) in resources.items():
     plt.figure(figsize=(7, 5))
@@ -200,63 +207,86 @@ filename = f"{path}PlateauMap.png"
 plt.savefig(filename, dpi=200, bbox_inches="tight")
 print(f"Guardado: {filename}")
 
-# second plateau height against the speed |ds/dt| of the ramps into it
-# (s_1 -> s_2) and out of it (s_2 -> 1), coloured by the final energy error.
-# Physical time, not t/T: here every point has a different T, and the speed
-# at which s* is crossed is ds/dt
+# speeds |ds/dt| of the ramps into the first plateau (0 -> s_1), into the
+# second (s_1 -> s_2) and out of it (s_2 -> 1). Physical time, not t/T:
+# here every point has a different T, and the speed at which s* is crossed
+# is ds/dt
 durations_arr = np.array(durations) * Tarr[:, None]
 with np.errstate(divide="ignore"):
     ramps = [
+        (s_1 / durations_arr[:, 0], r"Speed of the ramp $0 \to s_1$, $|ds/dt|$"),
         (np.abs(s_2 - s_1) / durations_arr[:, -3], r"Speed of the ramp $s_1 \to s_2$, $|ds/dt|$"),
         ((1.0 - s_2) / durations_arr[:, -1], r"Speed of the ramp $s_2 \to 1$, $|ds/dt|$"),
     ]
 # the shortest T give almost instantaneous ramps (speeds up to ~1e10, or a
 # jump of zero duration): they are left out so that the rest can be seen
 max_speed = 1.0
-fast = (ramps[0][0] > max_speed) | (ramps[1][0] > max_speed)
+fast = np.any([x > max_speed for x, _ in ramps], axis=0)
 if fast.any():
     print(f"Aviso: |ds/dt| > {max_speed} para T = {Tarr[fast].tolist()}; no se dibujan.")
 # the ramp s_1 -> s_2 goes back (s_2 < s_1) or forward: marker
 back = s_2 < s_1
 markers = [(back, "o", r"$s_2 < s_1$ (goes back)"), (~back, "^", r"$s_2 > s_1$")]
-norm = LogNorm(vmin=error_arr[~fast].min(), vmax=error_arr[~fast].max())
-fig, axes = plt.subplots(1, 2, figsize=(11, 5), sharey=True)
-for ax, (x, xlabel) in zip(axes, ramps):
-    ax.axhline(s_star, color="gray", linestyle=":", linewidth=1, zorder=1)
-    for direction, marker, _ in markers:
-        mask = direction & ~fast
-        points = ax.scatter(
-            x[mask],
-            s_2[mask],
-            c=error_arr[mask],
-            cmap="viridis_r",
-            norm=norm,
-            marker=marker,
-            s=22,
-            edgecolors="white",
-            linewidths=0.4,
-            zorder=3,
-        )
-    ax.set_xscale("log")
-    ax.set_xlabel(xlabel)
-    ax.grid()
-axes[0].set_ylabel(r"Second plateau height $s_2$")
-axes[0].set_ylim(-0.03, 1.03)
-# grey markers in the legend: the colour of the points is the error
-axes[0].legend(
-    handles=[
-        plt.Line2D([], [], marker=marker, color="gray", linestyle="", label=label)
-        for _, marker, label in markers
-    ],
-    loc="upper left",
-    framealpha=0.4,
-)
-fig.colorbar(points, ax=axes, label="Error in Energy at final time")
-fig.suptitle(f"N={N}, LZR{tag + tag_T}" + rf", dotted: $s^*={s_star:.3f}$")
 
-filename = f"{path}RampSlopes.png"
-plt.savefig(filename, dpi=200, bbox_inches="tight")
-print(f"Guardado: {filename}")
+
+def plot_against_ramps(y, ylabel, c, cmap, cnorm, clabel):
+    """One panel per ramp, y against its speed (log axis, the fast points
+    left out), coloured by c, with the direction of the ramp s_1 -> s_2 in the
+    marker. Returns the figure and the axes."""
+    fig, axes = plt.subplots(1, len(ramps), figsize=(16, 5), sharey=True)
+    for ax, (x, xlabel) in zip(axes, ramps):
+        for direction, marker, _ in markers:
+            mask = direction & ~fast
+            points = ax.scatter(
+                x[mask],
+                y[mask],
+                c=c[mask],
+                cmap=cmap,
+                norm=cnorm,
+                marker=marker,
+                s=22,
+                edgecolors="white",
+                linewidths=0.4,
+                zorder=3,
+            )
+        ax.set_xscale("log")
+        ax.set_xlabel(xlabel)
+        ax.grid()
+    axes[0].set_ylabel(ylabel)
+    # grey markers in the legend: the colour of the points is c. Below the
+    # panels, so that it covers no points
+    fig.legend(
+        handles=[
+            plt.Line2D([], [], marker=marker, color="gray", linestyle="", label=label)
+            for _, marker, label in markers
+        ],
+        loc="upper center",
+        bbox_to_anchor=(0.45, 0.02),
+        ncol=3,
+    )
+    fig.colorbar(points, ax=axes, label=clabel)
+    return fig, axes
+
+
+# each plateau height against the ramp speeds, coloured by the final energy
+# error, one figure per plateau
+norm_fast = LogNorm(vmin=error_arr[~fast].min(), vmax=error_arr[~fast].max())
+for name, s_plateau, ylabel in [
+    ("S1", s_1, r"First plateau height $s_1$"),
+    ("S2", s_2, r"Second plateau height $s_2$"),
+]:
+    fig, axes = plot_against_ramps(
+        s_plateau, ylabel, error_arr, "viridis_r", norm_fast,
+        "Error in Energy at final time",
+    )
+    for ax in axes:
+        ax.axhline(s_star, color="gray", linestyle=":", linewidth=1, zorder=1)
+    axes[0].set_ylim(-0.03, 1.03)
+    fig.suptitle(f"N={N}, LZR{tag + tag_T}" + rf", dotted: $s^*={s_star:.3f}$")
+
+    filename = f"{path}{name}vsRampSlopes.png"
+    plt.savefig(filename, dpi=200, bbox_inches="tight")
+    print(f"Guardado: {filename}")
 
 # maximum magic against the plateau heights and against the time at which it
 # is reached, coloured by the final energy error: which schedule variables
@@ -310,6 +340,31 @@ plt.title(f"N={N}, LZR{tag + tag_T}")
 plt.grid()
 
 filename = f"{path}MaxMagicvsTime.png"
+plt.savefig(filename, dpi=200, bbox_inches="tight")
+print(f"Guardado: {filename}")
+
+# final energy error against the ramp speeds, coloured by T: whether the
+# precision depends on how fast the ramps go
+fig, axes = plot_against_ramps(
+    error_arr, "Error in Energy at final time", Tarr, "viridis",
+    plt.Normalize(Tarr[~fast].min(), Tarr[~fast].max()), "T",
+)
+axes[0].set_yscale("log")
+fig.suptitle(f"N={N}, LZR{tag + tag_T}")
+
+filename = f"{path}ErrorvsRampSlopes.png"
+plt.savefig(filename, dpi=200, bbox_inches="tight")
+print(f"Guardado: {filename}")
+
+# maximum magic against the ramp speeds, coloured by the final energy error:
+# whether the speeds tell the groups of the MaxMagic plot apart
+fig, axes = plot_against_ramps(
+    max_magic_arr, "Maximum Magic", error_arr, "viridis_r", norm_fast,
+    "Error in Energy at final time",
+)
+fig.suptitle(f"N={N}, LZR{tag + tag_T}")
+
+filename = f"{path}MaxMagicvsRampSlopes.png"
 plt.savefig(filename, dpi=200, bbox_inches="tight")
 print(f"Guardado: {filename}")
 
