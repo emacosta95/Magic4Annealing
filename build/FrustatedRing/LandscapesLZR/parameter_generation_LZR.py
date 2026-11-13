@@ -1,4 +1,4 @@
-"""Optima of 10 seeds (spin basis, bounded) for the landscape scripts. See ../README.md."""
+"""Optima of 10 seeds (free fermions, bounded) for the landscape scripts. See ../README.md."""
 
 import os
 import sys
@@ -6,54 +6,27 @@ import time
 
 import numpy as np
 
-from src.annealing_utils import (
-    get_driver_hamiltonian,
-    get_longitudinal_hamiltonian,
-)
-from src.hamiltonian_utils import frustrated_ring_jij_hz
-from src.sparse_grape_method import SparseGRAPEModel, SparseGRAPETrainer
+from src.free_fermions_grape_method import NambuGRAPEModel
+from src.free_fermions_utils import NambuIsing1D
+from src.parallel import available_cpus, make_pool
+from src.sparse_grape_method import SparseGRAPETrainer
 from src.time_grid import make_time_grids
-from src.utils import Z2SymmetricSector
 
 start = time.perf_counter()
 
 T = int(sys.argv[1])  # total annealing time, in units of 1/J
 
-N = int(sys.argv[2])  # odd; N=9,11,13 feasible for full 2^N exact diagonalization
+N = int(sys.argv[2])  # odd; cost is O(N^3) per time step, no 2^N limit
 J, JL, JR = 1.0, 0.5, 0.45
 
-jij, hz = frustrated_ring_jij_hz(N, J, JL, JR)
-
-nqubits = N
-target_hamiltonian = get_longitudinal_hamiltonian(
-    jij, hz
-)  # sparse scipy matrix, full 2^N space
-driver_hamiltonian = get_driver_hamiltonian(
-    nqubits=nqubits
-)  # sparse scipy matrix, full 2^N space
-
-
-# The uniform superposition (driver ground state) is manifestly +1 under the
-# global flip Pi = prod_i X_i, so annealing dynamics from this initial state
-# stays confined to the +1 sector for all s in [0,1] (H(s) commutes with Pi
-# throughout, since target has only ZZ terms and driver only X terms).
-sector = Z2SymmetricSector(nqubits, sign=+1)
-
-dim = 2**nqubits
-psi_init_full = np.ones(dim, dtype=complex) / np.sqrt(dim)
-assert sector.check_confined(
-    psi_init_full
-), "initial state is not confined to the +1 sector!"
-
-target_hamiltonian_s = sector.project(
-    target_hamiltonian
-)  # sparse, dim_sector x dim_sector
-driver_hamiltonian_s = sector.project(driver_hamiltonian)
-psi_init_s = sector.project(psi_init_full)
+# Nambu/BdG representation of the same ring as frustrated_ring_jij_hz, in the
+# spin convention of src.free_fermions_utils (driver = -sum_i sz_i,
+# target = -sum_i J_i sx_i sx_{i+1}). pbc=True fixes the even-parity sector,
+# i.e. the Z2 +1 sector the spin-basis scripts project onto.
+nambu = NambuIsing1D.frustrated_ring(N, J, JL, JR)
 
 
 # ── time evolution parameters ─────────────────────────────────────────────────
-nlevels = 2
 tau = T  # try a range of tau; the ring is expected to need LARGE tau
 # for a linear ramp to reach the ground state (exponential
 # slowdown at the AC) -- this is exactly the motivation for
@@ -69,44 +42,60 @@ number_parameters = 2  # M=2 plateaus/arms -> n_params = 3*M+1 = 7, matching
 # variational schedule down to 7 parameters
 type = "LZS"
 seed_list = list(range(10))
-theta_list = []
-for i in seed_list:
-    model_i = SparseGRAPEModel(
-        initial_state=psi_init_s,
-        target_hamiltonian=target_hamiltonian_s,
-        initial_hamiltonian=driver_hamiltonian_s,
-        reference_hamiltonian=target_hamiltonian_s,
+
+
+def optimize_seed(seed):
+    """One optimization from the random initial point of `seed`, run in a
+    worker process (src/parallel.py). Returns (energy, theta). verbose=False:
+    the per-iteration output of several simultaneous optimizations would be
+    unreadable."""
+    model = NambuGRAPEModel(
+        nambu,
         tf=tau,
         number_of_parameters=number_parameters,
         nsteps=time_steps,
         type=type,
-        seed=i,
+        seed=seed,
         random=True,
         bounds_opt=True,
     )
 
-    trainer = SparseGRAPETrainer(model_i, verbose=True)
+    trainer = SparseGRAPETrainer(model, verbose=False)
     result = trainer.run()
-    theta_list.append(result["parameters"])
+    return result["energy"], result["parameters"]
 
 
-# formateo consistente de T para evitar problemas de precisión en el nombre
-T_str = str(T)
+# the guard is needed by the worker processes: they import this file again
+# (everything above) and must not repeat what follows
+if __name__ == "__main__":
+    # all the optima are kept (not only the best one): one process per seed,
+    # spread over the cores of the job
+    n_workers = min(available_cpus(), len(seed_list))
+    with make_pool(n_workers, blas_threads=1) as pool:
+        results = list(pool.map(optimize_seed, seed_list))
 
-nombre_archivo = f"../../../generated/FrustatedRing/ParametersLZR/ParametersLZR_T={T_str}_N={N}.npz"
+    theta_list = []
+    for seed, (energy, theta) in zip(seed_list, results):
+        print(f"seed {seed}: energy = {energy:.6f}", flush=True)
+        theta_list.append(theta)
 
-os.makedirs(os.path.dirname(nombre_archivo), exist_ok=True)
-np.savez(
-    nombre_archivo,
-    N=np.array([N]),
-    T=np.array([T]),  # guardamos T explícitamente también, por seguridad
-    seeds=seed_list,
-    theta_list=np.array(theta_list),
-)
+    # formateo consistente de T para evitar problemas de precisión en el nombre
+    T_str = str(T)
 
-end = time.perf_counter()
+    nombre_archivo = f"../../../generated/FrustatedRing/ParametersLZR/ParametersLZR_T={T_str}_N={N}.npz"
 
-elapsed = end - start
-print("Completed!! ")
-print(f"Guardado: {nombre_archivo}")
-print(f"Elapsed time: {elapsed:.2f} seconds")
+    os.makedirs(os.path.dirname(nombre_archivo), exist_ok=True)
+    np.savez(
+        nombre_archivo,
+        N=np.array([N]),
+        T=np.array([T]),  # guardamos T explícitamente también, por seguridad
+        seeds=seed_list,
+        theta_list=np.array(theta_list),
+    )
+
+    end = time.perf_counter()
+
+    elapsed = end - start
+    print("Completed!! ")
+    print(f"Guardado: {nombre_archivo}")
+    print(f"Elapsed time: {elapsed:.2f} seconds")

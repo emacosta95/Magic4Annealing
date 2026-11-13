@@ -85,8 +85,9 @@ All of them: GRAPE, 100 steps per unit T, magic by Majorana sampling
 
 ## Other
 
-- `parameter_generation_LZR.py T N`: spin basis, bounded GRAPE from seeds
-  0..9, saves all 10 optima to `ParametersLZR_T={T}_N={N}.npz`. Input of the
+- `parameter_generation_LZR.py T N`: free fermions (`NambuGRAPEModel`),
+  bounded GRAPE from seeds 0..9 (one process per seed), saves all 10 optima
+  to `ParametersLZR_T={T}_N={N}.npz`. Input of the
   `graphs/FrustatedRing/LZR*ThetaLandscape*.py` (plane in the raw parameters
   theta) and `LZR*ScheduleLandscape*.py` (plane in the schedule variables
   tau_k/T, s_m) scripts.
