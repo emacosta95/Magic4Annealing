@@ -1,7 +1,9 @@
 """
 Same plots as FinalEnergyvsQuantumResources.py, but at a fixed T: each point
 is one optimization from a different random initial point (seed). Also s_2
-against the slopes of the ramps before and after it (RampSlopes).
+against the slopes of the ramps before and after it (RampSlopes), and the
+maximum magic against s_1, s_2 (MaxMagicvsPlateaus) and against the time at
+which it is reached (MaxMagicvsTime).
 Input: QuantumResourcesSeedScan_N={N}_T={T}_LZR{tag}.npz
 (build/FrustatedRing/QuantumResourcesSeedScan/run_LZR_seed_scan_FF_bounded.py + merge_LZR_seed_scan.py).
 """
@@ -59,6 +61,7 @@ print(f"s* = {s_star:.4f} (gap min = {float(data['seed=0_gap_min'][0]):.4g})")
 
 energy_error = []
 max_magic = []
+max_magic_time = []
 max_entanglement = []
 plateaus = []
 durations = []
@@ -72,7 +75,10 @@ for seed in seeds:
     energy_error.append(
         data[f"seed={seed}_evo_energy"][-1] - data[f"seed={seed}_e0"][-1]
     )
-    max_magic.append(np.max(data[f"seed={seed}_{magic_key}"]))
+    magic_t = data[f"seed={seed}_{magic_key}"]
+    max_magic.append(np.max(magic_t))
+    # magic is computed at the times time_sub (subsampled state grid)
+    max_magic_time.append(data[f"seed={seed}_time_sub"][np.argmax(magic_t)] / T)
     max_entanglement.append(np.max(data[f"seed={seed}_entanglement"]))
 
     s_plateaus = plateau_heights(data[f"seed={seed}_theta"])
@@ -283,6 +289,84 @@ fig.colorbar(points, ax=axes, label="Error in Energy at final time")
 fig.suptitle(title + rf", dotted: $s^*={s_star:.3f}$")
 
 filename = f"{path}RampSlopes.png"
+plt.savefig(filename, dpi=200, bbox_inches="tight")
+print(f"Guardado: {filename}")
+
+# maximum magic against the plateau heights and against the time at which it
+# is reached, coloured by the final energy error: which schedule variables
+# tell the groups of the MaxMagic plot apart
+max_magic_arr = np.array(max_magic)
+fig, axes = plt.subplots(1, 2, figsize=(11, 5), sharey=True)
+for ax, (s_plateau, xlabel) in zip(
+    axes, [(s_1, r"First plateau height $s_1$"), (s_2, r"Second plateau height $s_2$")]
+):
+    ax.axvline(s_star, color="gray", linestyle=":", linewidth=1, zorder=1)
+    points = ax.scatter(
+        s_plateau,
+        max_magic_arr,
+        c=energy_error,
+        cmap="viridis_r",
+        norm=norm,
+        s=22,
+        edgecolors="white",
+        linewidths=0.4,
+        zorder=3,
+    )
+    ax.scatter(
+        s_plateau[best],
+        max_magic_arr[best],
+        marker="*",
+        facecolors="none",
+        s=200,
+        edgecolors="black",
+        linewidths=1.0,
+        zorder=4,
+        label=f"best seed ({seeds[best]})",
+    )
+    ax.set_xlim(-0.03, 1.03)
+    ax.set_xlabel(xlabel)
+    ax.grid()
+axes[0].set_ylabel("Maximum Magic")
+axes[0].legend(loc="upper left", framealpha=0.4)
+fig.colorbar(points, ax=axes, label="Error in Energy at final time")
+fig.suptitle(title + rf", dotted: $s^*={s_star:.3f}$")
+
+filename = f"{path}MaxMagicvsPlateaus.png"
+plt.savefig(filename, dpi=200, bbox_inches="tight")
+print(f"Guardado: {filename}")
+
+plt.figure(figsize=(7, 5))
+plt.scatter(
+    max_magic_time,
+    max_magic_arr,
+    c=energy_error,
+    cmap="viridis_r",
+    norm=norm,
+    s=22,
+    edgecolors="white",
+    linewidths=0.4,
+    zorder=3,
+)
+plt.colorbar(label="Error in Energy at final time")
+plt.scatter(
+    max_magic_time[best],
+    max_magic_arr[best],
+    marker="*",
+    facecolors="none",
+    s=200,
+    edgecolors="black",
+    linewidths=1.0,
+    zorder=4,
+    label=f"best seed ({seeds[best]})",
+)
+plt.legend(loc="upper left", framealpha=0.4)
+plt.xlim(0, 1)
+plt.xlabel(r"Time of the maximum magic $t/T$")
+plt.ylabel("Maximum Magic")
+plt.title(title)
+plt.grid()
+
+filename = f"{path}MaxMagicvsTime.png"
 plt.savefig(filename, dpi=200, bbox_inches="tight")
 print(f"Guardado: {filename}")
 
