@@ -3,7 +3,8 @@ Max-magic landscape on the theta plane (optimizer parameters, raw durations)
 through 3 of the 10 optima of
 ParametersLZR_T={T}_N={N}.npz (build/FrustatedRing/LandscapesLZR/parameter_generation_LZR.py).
 Usage: T N COMBO, COMBO = index into combinations(range(10), 3).
-Magic in the spin basis for N <= 9, free fermions above; 1 worker (JAX memory).
+Magic in the spin basis for N <= 9 (JAX, 1 worker), free fermions above
+(all the cores of the job).
 """
 
 import os
@@ -18,6 +19,7 @@ from src.landscape_utils import (
     max_magic_landscape,
     plot_max_magic_landscape,
 )
+from src.parallel import available_cpus
 from src.sparse_grape_method import lzs_bounds
 
 T = int(sys.argv[1])
@@ -38,10 +40,12 @@ number_parameters = 2  # M=2 plateaus/arms -> n_params = 3*M+1 = 7, matching
 # Werner et al.'s reduction from Cote et al.'s ~100-parameter
 # variational schedule down to 7 parameters
 resolution = 50
-# processes the points of the plane are spread over. 1: the magic uses JAX,
-# ~300 MB and ~1.5 cores per process; several of them filled the memory of a
-# laptop. Raise it on the cluster to finish one landscape sooner
-n_workers = 1
+# processes the points of the plane are spread over. N <= 9 (spin_magic_max_n
+# of RingLandscape): 1, the magic uses JAX, ~300 MB and ~1.5 cores per
+# process; several of them filled the memory of a laptop. Raise it on the
+# cluster to finish one landscape sooner. N > 9: free-fermion sampling, no
+# JAX, ~160 MB and 1 core per process (N=13): all the cores of the job
+n_workers = 1 if N <= 9 else available_cpus()
 
 # theta -> maximum magic (src/landscape_utils.py)
 landscape = RingLandscape(
